@@ -1,0 +1,6 @@
+{
+  "name": "FixNear - Field Service Operations Platform",
+  "description": "Role-based field service management platform for Customers, Technicians, and Managers with end-to-end request lifecycle and dispatch workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
