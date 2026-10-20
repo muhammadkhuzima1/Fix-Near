@@ -162,29 +162,47 @@ export class SupabaseService {
   /**
    * AUTHENTICATION
    */
+  public static isSigningIn = false;
 
   // Fetch user profile from public.profiles strictly
-  public static async getProfile(userId: string): Promise<User | null> {
+  public static async getProfile(userId: string, userEmail?: string): Promise<User | null> {
     const client = getSupabaseClient();
     if (!client) {
-      const local = store.getUserById(userId);
+      const local =
+        store.getUserById(userId) || (userEmail ? store.getUserByEmail(userEmail) : undefined);
       return local || null;
     }
 
     try {
-      const { data, error } = await client
+      let { data, error } = await client
         .from('profiles')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
+
+      // Fallback lookup by email if profile row was queried before ID sync
+      if (!data && userEmail) {
+        const emailLookup = await client
+          .from('profiles')
+          .select('*')
+          .ilike('email', userEmail.trim())
+          .maybeSingle();
+        if (!emailLookup.error && emailLookup.data) {
+          data = emailLookup.data;
+        }
+      }
 
       if (error || !data) {
         console.error('Error fetching public.profiles:', error);
         return null;
       }
 
+      const normalizedRole = String(data.role || '')
+        .trim()
+        .toLowerCase();
+
       // STRICT: Validate role exists and is in customer | technician | manager
-      if (!data.role || !['customer', 'technician', 'manager'].includes(data.role)) {
+      if (!normalizedRole || !['customer', 'technician', 'manager'].includes(normalizedRole)) {
         console.error('CRITICAL: Invalid or missing role in public.profiles for user:', userId);
         return null;
       }
@@ -192,8 +210,8 @@ export class SupabaseService {
       return {
         id: data.id,
         email: data.email,
-        fullName: data.full_name,
-        role: data.role as UserRole,
+        fullName: data.full_name || data.email,
+        role: normalizedRole as UserRole,
         phone: data.phone || '',
         createdAt: data.created_at,
       };
@@ -227,6 +245,7 @@ export class SupabaseService {
       return { success: true, user };
     }
 
+    this.isSigningIn = true;
     try {
       const { data, error } = await client.auth.signInWithPassword({
         email: email.trim(),
@@ -238,12 +257,12 @@ export class SupabaseService {
       }
 
       // Fetch profile strictly from public.profiles
-      const profile = await this.getProfile(data.user.id);
+      const profile = await this.getProfile(data.user.id, data.user.email || email);
       if (!profile) {
         await client.auth.signOut();
         return {
           success: false,
-          error: 'No profile found in public.profiles. Access denied. (Never defaulting to customer)',
+          error: `Authenticated in Supabase Auth (${data.user.email}), but no profile record was found in public.profiles for user ID ${data.user.id}. Please ensure a matching row exists in public.profiles with role = '${portalRole || 'customer'}'.`,
         };
       }
 
@@ -266,7 +285,7 @@ export class SupabaseService {
 
       // If technician, verify technician profile is active
       if (portalRole === 'technician') {
-        const techProf = await this.getTechnicianProfile(data.user.id);
+        const techProf = await this.getTechnicianProfile(profile.id);
         if (!techProf) {
           await client.auth.signOut();
           return {
@@ -281,6 +300,8 @@ export class SupabaseService {
       return { success: true, user: profile };
     } catch (err: any) {
       return { success: false, error: err.message || 'Authentication error' };
+    } finally {
+      this.isSigningIn = false;
     }
   }
 
@@ -1555,16 +1576,6 @@ export class SupabaseService {
         .select('id, full_name, role')
         .eq('role', 'technician');
 
-      if (techUserErr || !techUsers || techUsers.length === 0) {
-        return [];
-      }
-
-      const activeTechIds = new Set(
-        techUsers
-          .filter((t: any) => !t.full_name?.startsWith('[Removed]'))
-          .map((t: any) => t.id)
-      );
-
       // 2. Fetch technician profiles
       const { data, error } = await client
         .from('technician_profiles')
@@ -1572,21 +1583,24 @@ export class SupabaseService {
 
       if (error || !data) return [];
 
-      // Clean up orphaned technician profiles if they belong to users whose role is no longer technician
-      const orphanedIds = data.filter((d: any) => !activeTechIds.has(d.id)).map((d: any) => d.id);
-      if (orphanedIds.length > 0) {
-        client.from('technician_profiles').delete().in('id', orphanedIds).then(() => {}, () => {});
-      }
+      const activeTechIds =
+        !techUserErr && techUsers && techUsers.length > 0
+          ? new Set(
+              techUsers
+                .filter((t: any) => !t.full_name?.startsWith('[Removed]'))
+                .map((t: any) => t.id)
+            )
+          : null;
 
-      // Return ONLY profiles matching active technicians with role = 'technician'
+      // Return profiles matching active technicians (without destructively deleting rows during fetch)
       return data
-        .filter((d: any) => activeTechIds.has(d.id))
+        .filter((d: any) => (activeTechIds ? activeTechIds.has(d.id) : true))
         .map((d: any) => ({
           id: d.id,
           userId: d.id,
-          specialty: d.specialty,
+          specialty: d.specialty || 'General Field Tech',
           additionalSkills: d.additional_skills || [],
-          status: d.status,
+          status: d.status || 'available',
           rating: d.rating ? Number(d.rating) : 5.0,
           completedJobsCount: d.completed_jobs_count ? Number(d.completed_jobs_count) : 0,
           experienceYears: d.experience_years ? Number(d.experience_years) : undefined,

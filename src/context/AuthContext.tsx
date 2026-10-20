@@ -54,9 +54,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const client = getSupabaseClient();
     if (client) {
       try {
-        const { data: { session } } = await client.auth.getSession();
+        const {
+          data: { session },
+        } = await client.auth.getSession();
         if (session?.user) {
-          const profile = await SupabaseService.getProfile(session.user.id);
+          const profile = await SupabaseService.getProfile(session.user.id, session.user.email);
           if (profile) {
             setCurrentUser(profile);
             store.setCurrentUserId(profile.id);
@@ -92,12 +94,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAuthLoading(true);
       if (client) {
         try {
-          const { data: { session } } = await client.auth.getSession();
+          const {
+            data: { session },
+          } = await client.auth.getSession();
           if (session?.user && isMounted) {
-            const profile = await SupabaseService.getProfile(session.user.id);
+            const profile = await SupabaseService.getProfile(session.user.id, session.user.email);
             if (profile) {
               setCurrentUser(profile);
               store.setCurrentUserId(profile.id);
+              const allUsers = await SupabaseService.fetchAllUsers();
+              if (isMounted) setUsers(allUsers);
             } else {
               // Strictly never default to customer
               setCurrentUser(null);
@@ -125,12 +131,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (client) {
       const { data } = client.auth.onAuthStateChange(async (event, session) => {
         if (!isMounted) return;
+        // Wait for explicit signIn() to complete its role validation before setting currentUser
+        if (SupabaseService.isSigningIn) return;
+
         if (session?.user) {
-          const profile = await SupabaseService.getProfile(session.user.id);
-          if (profile) {
+          const profile = await SupabaseService.getProfile(session.user.id, session.user.email);
+          if (profile && isMounted) {
             setCurrentUser(profile);
             store.setCurrentUserId(profile.id);
-          } else {
+            const allUsers = await SupabaseService.fetchAllUsers();
+            if (isMounted) setUsers(allUsers);
+          } else if (isMounted) {
             setCurrentUser(null);
             store.setCurrentUserId(null);
           }
@@ -188,6 +199,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await SupabaseService.signIn(email, password, requestedRole);
         if (res.success && res.user) {
           setCurrentUser(res.user);
+          SupabaseService.fetchAllUsers().then(setUsers).catch(console.error);
         }
         return res;
       }

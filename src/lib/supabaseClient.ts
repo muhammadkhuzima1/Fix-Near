@@ -3,32 +3,53 @@ import { SupabaseConfig } from '../types';
 
 const STORAGE_KEY = 'fixnear_supabase_config';
 
-export function getStoredSupabaseConfig(): SupabaseConfig {
-  const envUrl = (
-    ((typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) ||
-      (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) ||
-      '')
-  ).trim().replace(/\/+$/, '');
+/**
+ * Normalizes a Supabase URL by trimming whitespace, removing trailing slashes,
+ * and stripping accidental API subpaths like /rest/v1, /auth/v1, /realtime/v1, or /storage/v1.
+ */
+export function normalizeSupabaseUrl(rawUrl: string): string {
+  if (!rawUrl) return '';
+  let cleaned = rawUrl.trim().replace(/\/+$/, '');
+  cleaned = cleaned.replace(/\/(rest|auth|realtime|storage)\/v1$/i, '');
+  return cleaned.replace(/\/+$/, '');
+}
 
-  const envKey = (
-    ((typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) ||
-      (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) ||
-      '')
-  ).trim();
+export function getStoredSupabaseConfig(): SupabaseConfig {
+  const rawEnvUrl =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
+    (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) ||
+    '';
+
+  const rawEnvKey =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
+    (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) ||
+    '';
+
+  const envUrl = normalizeSupabaseUrl(String(rawEnvUrl));
+  const envKey = String(rawEnvKey).trim();
+
+  // If environment variables are configured (e.g. on Vercel), prioritize them
+  if (envUrl && envKey) {
+    return {
+      url: envUrl,
+      anonKey: envKey,
+      isConnected: true,
+    };
+  }
 
   const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
-      const url = (parsed.url || envUrl || '').trim().replace(/\/+$/, '');
-      const anonKey = (parsed.anonKey || envKey || '').trim();
+      const url = normalizeSupabaseUrl(parsed.url || envUrl || '');
+      const anonKey = String(parsed.anonKey || envKey || '').trim();
       return {
         url,
         anonKey,
         isConnected: Boolean(url && anonKey),
       };
     } catch {
-      // ignore
+      // ignore malformed storage
     }
   }
 
@@ -40,7 +61,7 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
 }
 
 export function saveSupabaseConfig(config: { url: string; anonKey: string }): void {
-  const cleanUrl = config.url.trim().replace(/\/+$/, '');
+  const cleanUrl = normalizeSupabaseUrl(config.url);
   const cleanKey = config.anonKey.trim();
   const isConnected = Boolean(cleanUrl && cleanKey);
   localStorage.setItem(
@@ -60,7 +81,7 @@ export async function testSupabaseCredentials(
   anonKey: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const cleanUrl = url.trim().replace(/\/+$/, '');
+    const cleanUrl = normalizeSupabaseUrl(url);
     const cleanKey = anonKey.trim();
     if (!cleanUrl || !cleanKey) {
       return { success: false, error: 'Both Supabase URL and Anon Key are required.' };
@@ -80,6 +101,8 @@ export async function testSupabaseCredentials(
 }
 
 let cachedClient: SupabaseClient | null = null;
+let cachedUrl = '';
+let cachedKey = '';
 
 export function getSupabaseClient(): SupabaseClient | null {
   const config = getStoredSupabaseConfig();
@@ -87,11 +110,13 @@ export function getSupabaseClient(): SupabaseClient | null {
     return null;
   }
 
-  if (cachedClient) {
+  if (cachedClient && cachedUrl === config.url && cachedKey === config.anonKey) {
     return cachedClient;
   }
 
   try {
+    cachedUrl = config.url;
+    cachedKey = config.anonKey;
     cachedClient = createClient(config.url, config.anonKey, {
       auth: {
         persistSession: true,

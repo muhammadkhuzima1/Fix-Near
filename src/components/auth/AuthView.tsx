@@ -21,11 +21,13 @@ export const AuthView: React.FC<AuthViewProps> = ({
   initialCustomerMode = 'signin',
   onBackToHome,
 }) => {
-  const { login, registerCustomer, provisionInitialManager, users, isSupabaseActive } = useAuth();
+  const { login, registerCustomer } = useAuth();
   const { showToast } = useToast();
 
   const [activePortal, setActivePortal] = useState<UserRole>(initialPortal);
-  const [customerMode, setCustomerMode] = useState<'signin' | 'signup'>(initialCustomerMode);
+  const [customerMode, setCustomerMode] = useState<'signin' | 'signup'>(
+    initialCustomerMode === 'signup' ? 'signup' : 'signin'
+  );
 
   // Sync state if initial props change
   React.useEffect(() => {
@@ -33,7 +35,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   }, [initialPortal]);
 
   React.useEffect(() => {
-    setCustomerMode(initialCustomerMode);
+    setCustomerMode(initialCustomerMode === 'signup' ? 'signup' : 'signin');
   }, [initialCustomerMode]);
 
   // Customer Form state
@@ -49,14 +51,9 @@ export const AuthView: React.FC<AuthViewProps> = ({
   // Manager Form state
   const [mgrEmail, setMgrEmail] = useState('');
   const [mgrPassword, setMgrPassword] = useState('');
-  const [mgrFullName, setMgrFullName] = useState('');
-  const [mgrPhone, setMgrPhone] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const existingManagers = users.filter((u) => u.role === 'manager');
-  const hasManager = existingManagers.length > 0;
 
   const handleCustomerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,43 +141,23 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setLoading(true);
 
     try {
-      if (!hasManager && !isSupabaseActive) {
-        if (!mgrFullName.trim() || !mgrEmail.trim() || !mgrPhone.trim() || !mgrPassword.trim()) {
-          setErrorMessage('Please fill in all manager registration fields.');
-          setLoading(false);
-          return;
-        }
-
-        const res = await provisionInitialManager({
-          email: mgrEmail.trim(),
-          fullName: mgrFullName.trim(),
-          phone: mgrPhone.trim(),
-          password: mgrPassword.trim(),
-        });
-
-        if (!res.success) {
-          setErrorMessage(res.error || 'Failed to provision initial manager account.');
-          setLoading(false);
-          return;
-        }
-
-        showToast(`Operations Manager account created for ${mgrFullName}.`, 'success');
-      } else {
-        if (!mgrEmail.trim() || !mgrPassword.trim()) {
-          setErrorMessage('Please enter manager email and password.');
-          setLoading(false);
-          return;
-        }
-
-        const res = await login(mgrEmail.trim(), mgrPassword.trim(), 'manager');
-        if (!res.success) {
-          setErrorMessage(res.error || 'Manager login failed.');
-          setLoading(false);
-          return;
-        }
-
-        showToast('Signed in to Operations Management Console.', 'success');
+      if (!mgrEmail.trim() || !mgrPassword.trim()) {
+        setErrorMessage('Please enter manager email and password.');
+        setLoading(false);
+        return;
       }
+
+      const res = await login(mgrEmail.trim(), mgrPassword.trim(), 'manager');
+      if (!res.success) {
+        setErrorMessage(
+          res.error ||
+            'Manager login failed. Only existing authorized Operations Manager accounts in Supabase can access this console.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      showToast('Signed in to Operations Management Console.', 'success');
     } catch (err: any) {
       setErrorMessage(err.message || 'Authentication error');
     } finally {
@@ -281,12 +258,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
               <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3]">
                 <div>
                   <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#143628]">
-                    {customerMode === 'signup' ? 'Create Customer Account' : 'Customer Sign In'}
+                    {customerMode === 'signup' ? 'Customer Sign Up' : 'Customer Sign In'}
                   </h2>
                   <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
                     {customerMode === 'signup'
-                      ? 'Register to submit service tickets and track technicians'
-                      : 'Sign in to review your active repair orders'}
+                      ? 'Create a customer account to submit service tickets and track repairs'
+                      : 'Sign in to review your active repair orders and request services'}
                   </p>
                 </div>
 
@@ -317,7 +294,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         : 'text-[#526056] hover:text-[#143628]'
                     }`}
                   >
-                    Register
+                    Sign Up
                   </button>
                 </div>
               </div>
@@ -391,11 +368,43 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     {loading
                       ? 'Processing...'
                       : customerMode === 'signup'
-                      ? 'Complete Registration & Open Portal'
+                      ? 'Sign Up & Open Customer Portal'
                       : 'Sign In to Customer Portal'}
                   </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
+
+                <div className="pt-2 text-center text-xs text-[#526056]">
+                  {customerMode === 'signin' ? (
+                    <span>
+                      Don&apos;t have a customer account?{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomerMode('signup');
+                          setErrorMessage(null);
+                        }}
+                        className="font-semibold text-[#143628] hover:underline cursor-pointer"
+                      >
+                        Sign Up
+                      </button>
+                    </span>
+                  ) : (
+                    <span>
+                      Already have an account?{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomerMode('signin');
+                          setErrorMessage(null);
+                        }}
+                        className="font-semibold text-[#143628] hover:underline cursor-pointer"
+                      >
+                        Sign In
+                      </button>
+                    </span>
+                  )}
+                </div>
               </form>
             </div>
           )}
@@ -467,49 +476,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
             <div className="space-y-5">
               <div className="pb-3 border-b border-[#F0EBE3]">
                 <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#143628]">
-                  {hasManager || isSupabaseActive
-                    ? 'Operations Manager Sign In'
-                    : 'Initialize Platform Manager'}
+                  Operations Manager Sign In
                 </h2>
                 <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
-                  {hasManager || isSupabaseActive
-                    ? 'Supervise dispatch workflows, technicians, and system operations.'
-                    : 'Set up the initial operations administrator credentials.'}
+                  Supervise dispatch workflows, technicians, and system operations.
                 </p>
               </div>
 
-              <form onSubmit={handleManagerSubmit} className="space-y-4">
-                {!hasManager && !isSupabaseActive && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                        Manager Full Name *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={mgrFullName}
-                        onChange={(e) => setMgrFullName(e.target.value)}
-                        placeholder="Operations Director"
-                        className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                        Contact Phone *
-                      </label>
-                      <input
-                        type="tel"
-                        required
-                        value={mgrPhone}
-                        onChange={(e) => setMgrPhone(e.target.value)}
-                        placeholder="0300-5550100"
-                        className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0 font-mono"
-                      />
-                    </div>
-                  </>
-                )}
+              <div className="p-3.5 bg-[#F5F2EB] border border-[#E2DBD0] rounded-lg text-xs text-[#4A554E] leading-relaxed">
+                <span className="font-semibold text-[#143628]">Authorized Personnel Only:</span> Sign in
+                with your existing Operations Manager account verified in <code className="font-mono text-[#143628]">public.profiles</code>.
+              </div>
 
+              <form onSubmit={handleManagerSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-[#2C3830] mb-1">
                     Manager Email Address *
@@ -543,13 +522,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   disabled={loading}
                   className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs mt-3 disabled:opacity-60"
                 >
-                  <span>
-                    {loading
-                      ? 'Authenticating...'
-                      : hasManager || isSupabaseActive
-                      ? 'Sign In to Manager Console'
-                      : 'Initialize Manager Account'}
-                  </span>
+                  <span>{loading ? 'Authenticating...' : 'Sign In to Manager Console'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </form>

@@ -23,6 +23,12 @@ import {
   UserCheck,
 } from 'lucide-react';
 
+import heroRepairImg from '../../assets/images/hero_home_repair_technician_1792151850806.jpg';
+import plumbingImg from '../../assets/images/service_plumbing_repair_1792151850780.jpg';
+import electricalImg from '../../assets/images/service_electrical_repair_1792151851213.jpg';
+import hvacImg from '../../assets/images/service_hvac_repair_1792151852303.jpg';
+import applianceImg from '../../assets/images/service_appliance_repair_1792323122099.jpg';
+
 interface PublicFeedbackItem {
   id: string;
   ticketNumber: string;
@@ -92,7 +98,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
     } else if (currentUser) {
       if (onGoToDashboard) onGoToDashboard();
     } else {
-      onNavigateToAuth('customer', 'signup');
+      onNavigateToAuth('customer', 'signin');
     }
   };
 
@@ -204,7 +210,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
       description:
         'Fast diagnostics and repairs for pipe leaks, water heaters, clogged drains, and kitchen or bathroom fixtures.',
       hourlyRate: 'PKR 2,000/hour',
-      image: '/src/assets/images/service_plumbing_repair_1792151850780.jpg',
+      image: plumbingImg,
     },
     {
       id: 'electrical',
@@ -213,7 +219,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
       description:
         'Certified troubleshooting for tripping breakers, faulty outlets, light fixture installations, and residential wiring.',
       hourlyRate: 'PKR 2,200/hour',
-      image: '/src/assets/images/service_electrical_repair_1792151851213.jpg',
+      image: electricalImg,
     },
     {
       id: 'hvac',
@@ -222,7 +228,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
       description:
         'Expert cooling and heating maintenance, air conditioner servicing, thermostat calibration, and airflow repair.',
       hourlyRate: 'PKR 2,500/hour',
-      image: '/src/assets/images/service_hvac_repair_1792151852303.jpg',
+      image: hvacImg,
     },
     {
       id: 'appliance',
@@ -231,7 +237,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
       description:
         'Reliable repair service for refrigerators, washing machines, dryers, dishwashers, and major kitchen appliances.',
       hourlyRate: 'PKR 2,000/hour',
-      image: '/src/assets/images/service_appliance_repair_1792323122099.jpg',
+      image: applianceImg,
     },
   ];
 
@@ -502,7 +508,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
             <div className="lg:col-span-5 w-full">
               <div className="relative rounded-2xl overflow-hidden shadow-md border border-[#E3DCD1] bg-[#F4EFEA]">
                 <img
-                  src="/src/assets/images/hero_home_repair_technician_1792151850806.jpg"
+                  src={heroRepairImg}
                   alt="Professional certified technician repairing residential fixture"
                   referrerPolicy="no-referrer"
                   className="w-full h-80 sm:h-96 lg:h-[440px] object-cover object-center"
