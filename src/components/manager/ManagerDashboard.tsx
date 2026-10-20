@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { ServiceRequest, User, TechnicianProfile } from '../../types';
 import { store } from '../../services/store';
@@ -15,6 +15,8 @@ import {
   Calendar,
   MapPin,
   TrendingUp,
+  Sparkles,
+  UserCheck,
 } from 'lucide-react';
 
 interface ManagerDashboardProps {
@@ -25,6 +27,8 @@ interface ManagerDashboardProps {
   onSelectRequest: (request: ServiceRequest) => void;
   onNavigateTab: (tab: string) => void;
   onOpenCreateTech: () => void;
+  onQuickApprove?: (request: ServiceRequest) => void | Promise<void>;
+  onQuickAIDispatch?: (request: ServiceRequest) => void | Promise<void>;
 }
 
 export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
@@ -35,14 +39,42 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   onSelectRequest,
   onNavigateTab,
   onOpenCreateTech,
+  onQuickApprove,
+  onQuickAIDispatch,
 }) => {
   const { currentUser, isSupabaseActive } = useAuth();
+  const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
+
+  const handleRowApprove = async (req: ServiceRequest) => {
+    if (!onQuickApprove || busyIds[req.id]) return;
+    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
+    try {
+      await onQuickApprove(req);
+    } finally {
+      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
+    }
+  };
+
+  const handleRowAIDispatch = async (req: ServiceRequest) => {
+    if (busyIds[req.id]) return;
+    if (!onQuickAIDispatch) {
+      onSelectRequest(req);
+      return;
+    }
+    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
+    try {
+      await onQuickAIDispatch(req);
+    } finally {
+      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
+    }
+  };
 
   const pendingCount = requests.filter((r) => r.status === 'pending').length;
   const approvedCount = requests.filter((r) => r.status === 'approved').length;
-  const activeCount = requests.filter((r) =>
+  const activeDispatches = requests.filter((r) =>
     ['assigned', 'accepted', 'in_progress'].includes(r.status)
-  ).length;
+  );
+  const activeCount = activeDispatches.length;
   const completedCount = requests.filter((r) => r.status === 'completed').length;
 
   // Technicians stats strictly filtered against active technician users
@@ -120,7 +152,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
             {approvedCount}
           </div>
-          <div className="text-[11px] text-[#69776E] truncate">Approved, unassigned</div>
+          <div className="text-[11px] text-[#69776E] truncate">Approved, ready for AI Dispatch</div>
         </div>
 
         <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
@@ -131,7 +163,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
             {activeCount}
           </div>
-          <div className="text-[11px] text-[#69776E] truncate">Assigned or on-site</div>
+          <div className="text-[11px] text-[#69776E] truncate">Assigned & scheduled</div>
         </div>
 
         <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
@@ -159,85 +191,200 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         </div>
       </div>
 
-      {/* Two Column Layout: Urgent Queue + Sidebar widgets */}
+      {/* Two Column Layout: Dispatches + Sidebar widgets */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Immediate Queue */}
-        <div className="lg:col-span-2 bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
-          <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3] gap-2">
-            <div className="min-w-0">
-              <h3 className="font-serif text-lg font-bold text-[#143628] truncate">
-                Pending & Unassigned Dispatches
-              </h3>
-              <p className="text-xs text-[#69776E] mt-0.5 truncate">
-                Tickets requiring management review or technician assignment
-              </p>
+        <div className="lg:col-span-2 space-y-6">
+          {/* 1. Pending & Unassigned Dispatches */}
+          <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3] gap-2">
+              <div className="min-w-0">
+                <h3 className="font-serif text-lg font-bold text-[#143628] truncate">
+                  Pending & Unassigned Dispatches
+                </h3>
+                <p className="text-xs text-[#69776E] mt-0.5 truncate">
+                  Step 1: Approve pending tickets · Step 2: Confirm AI Dispatch & schedule
+                </p>
+              </div>
+              <button
+                onClick={() => onNavigateTab('requests')}
+                className="text-xs font-semibold text-[#143628] hover:underline flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                <span>View All</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
-            <button
-              onClick={() => onNavigateTab('requests')}
-              className="text-xs font-semibold text-[#143628] hover:underline flex items-center gap-1 cursor-pointer shrink-0"
-            >
-              <span>View All</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+
+            {urgentQueue.length === 0 ? (
+              <div className="text-center py-8 space-y-2">
+                <CheckCircle2 className="w-10 h-10 text-[#52B788] mx-auto" />
+                <div className="font-serif text-base font-bold text-[#143628]">
+                  All dispatches are up to date!
+                </div>
+                <p className="text-xs text-[#69776E] max-w-sm mx-auto">
+                  No tickets currently require approval or technician dispatch.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F0EBE3]">
+                {urgentQueue.map((req) => {
+                  const isBusy = Boolean(busyIds[req.id]);
+                  return (
+                    <div
+                      key={req.id}
+                      onClick={() => onSelectRequest(req)}
+                      className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#FAF8F5] px-2 rounded-lg transition-colors cursor-pointer group"
+                    >
+                      <div className="space-y-1.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-mono font-semibold text-[#143628]">
+                            {req.ticketNumber}
+                          </span>
+                          <StatusBadge status={req.status} />
+                          <PriorityBadge priority={req.priority} />
+                          <span className="text-xs text-[#69776E] capitalize truncate">
+                            · {req.category}
+                          </span>
+                        </div>
+
+                        <h4 className="text-sm font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
+                          {req.title}
+                        </h4>
+
+                        <div className="flex items-center gap-3 sm:gap-4 text-xs text-[#69776E] flex-wrap">
+                          <span className="font-medium text-[#2C3830] truncate">
+                            Customer: {req.customerName}
+                          </span>
+                          <span className="flex items-center gap-1 font-mono">
+                            <Calendar className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
+                            <span>{req.preferredDate}</span>
+                          </span>
+                          {req.preferredTimeSlot && (
+                            <span className="flex items-center gap-1 font-mono">
+                              <Clock className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
+                              <span>{req.preferredTimeSlot}</span>
+                            </span>
+                          )}
+                          <span className="flex items-center gap-1 truncate max-w-xs">
+                            <MapPin className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
+                            <span className="truncate">{req.serviceAddress.city}</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#F0EBE3]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {req.status === 'pending' && onQuickApprove ? (
+                          <button
+                            onClick={() => handleRowApprove(req)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer"
+                          >
+                            {isBusy ? 'Approving...' : 'Approve'}
+                          </button>
+                        ) : req.status === 'approved' && !req.assignedTechnicianId ? (
+                          <button
+                            onClick={() => handleRowAIDispatch(req)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                            <span>{isBusy ? 'Dispatching...' : 'AI Dispatch'}</span>
+                          </button>
+                        ) : (
+                          <span className="text-xs font-semibold text-[#143628] bg-[#EAE4D9] px-2 py-0.5 rounded border border-[#D8CFBE]">
+                            {req.status === 'pending' ? 'Needs Approval' : 'Ready for Dispatch'}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => onSelectRequest(req)}
+                          className="p-1.5 text-[#8C9B90] hover:text-[#143628] rounded-md transition-colors cursor-pointer"
+                          title="Open Ticket Details"
+                        >
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
-          {urgentQueue.length === 0 ? (
-            <div className="text-center py-10 space-y-2">
-              <CheckCircle2 className="w-10 h-10 text-[#52B788] mx-auto" />
-              <div className="font-serif text-base font-bold text-[#143628]">
-                All dispatches are up to date!
+          {/* 2. Scheduled & Active Dispatches (Assigned / Accepted / In Progress) */}
+          <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3] gap-2">
+              <div className="min-w-0">
+                <h3 className="font-serif text-lg font-bold text-[#143628] truncate">
+                  Scheduled & Active Dispatches
+                </h3>
+                <p className="text-xs text-[#69776E] mt-0.5 truncate">
+                  Confirmed technician assignments and scheduled service appointments
+                </p>
               </div>
-              <p className="text-xs text-[#69776E] max-w-sm mx-auto">
-                No tickets currently require approval or assignment.
-              </p>
+              <span className="text-xs font-mono font-semibold text-[#143628] bg-[#E2EFE7] px-2.5 py-1 rounded-md border border-[#BFDFCD] shrink-0">
+                {activeDispatches.length} Active
+              </span>
             </div>
-          ) : (
-            <div className="divide-y divide-[#F0EBE3]">
-              {urgentQueue.map((req) => (
-                <div
-                  key={req.id}
-                  onClick={() => onSelectRequest(req)}
-                  className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#FAF8F5] px-2 rounded-lg transition-colors cursor-pointer group"
-                >
-                  <div className="space-y-1.5 min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-mono font-semibold text-[#143628]">
-                        {req.ticketNumber}
-                      </span>
-                      <StatusBadge status={req.status} />
-                      <PriorityBadge priority={req.priority} />
-                      <span className="text-xs text-[#69776E] capitalize truncate">· {req.category}</span>
+
+            {activeDispatches.length === 0 ? (
+              <div className="text-center py-6 text-xs text-[#69776E]">
+                No active scheduled dispatches right now. Dispatched jobs will appear here with their assigned technician and appointment time.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#F0EBE3]">
+                {activeDispatches.map((req) => (
+                  <div
+                    key={req.id}
+                    onClick={() => onSelectRequest(req)}
+                    className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#FAF8F5] px-2 rounded-lg transition-colors cursor-pointer group"
+                  >
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-mono font-semibold text-[#143628]">
+                          {req.ticketNumber}
+                        </span>
+                        <StatusBadge status={req.status} />
+                        <PriorityBadge priority={req.priority} />
+                        <span className="text-xs text-[#69776E] capitalize truncate">
+                          · {req.category}
+                        </span>
+                      </div>
+
+                      <h4 className="text-sm font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
+                        {req.title}
+                      </h4>
+
+                      <div className="flex items-center gap-3 text-xs text-[#69776E] flex-wrap">
+                        {req.assignedTechnicianName && (
+                          <span className="inline-flex items-center gap-1 text-indigo-800 font-semibold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                            <UserCheck className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>{req.assignedTechnicianName}</span>
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1 font-mono text-[#143628] font-semibold bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E8E2D8]">
+                          <Calendar className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
+                          <span>{req.preferredDate}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1 font-mono text-[#143628] font-semibold bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E8E2D8]">
+                          <Clock className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
+                          <span>{req.preferredTimeSlot || '09:00 - 11:00'}</span>
+                        </span>
+                        <span className="text-[#526056] truncate">
+                          Customer: {req.customerName}
+                        </span>
+                      </div>
                     </div>
 
-                    <h4 className="text-sm font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
-                      {req.title}
-                    </h4>
-
-                    <div className="flex items-center gap-3 sm:gap-4 text-xs text-[#69776E] flex-wrap">
-                      <span className="font-medium text-[#2C3830] truncate">
-                        Customer: {req.customerName}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
-                        <span>{req.preferredDate}</span>
-                      </span>
-                      <span className="flex items-center gap-1 truncate max-w-xs">
-                        <MapPin className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
-                        <span className="truncate">{req.serviceAddress.city}</span>
-                      </span>
+                    <div className="flex items-center justify-end gap-2 shrink-0">
+                      <ArrowRight className="w-4 h-4 text-[#8C9B90] group-hover:text-[#143628] group-hover:translate-x-0.5 transition-all" />
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#F0EBE3]">
-                    <span className="text-xs font-semibold text-[#143628] bg-[#EAE4D9] px-2 py-0.5 rounded border border-[#D8CFBE]">
-                      {req.status === 'pending' ? 'Needs Approval' : 'Needs Tech'}
-                    </span>
-                    <ArrowRight className="w-4 h-4 text-[#8C9B90] group-hover:text-[#143628] group-hover:translate-x-0.5 transition-all" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Side Roster & Customers */}
@@ -316,3 +463,4 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     </div>
   );
 };
+

@@ -505,133 +505,141 @@ class FixNearStore {
     };
 
     const requests = this.getRequests();
-
-    // Check for matching available technician (AI Auto-Dispatch)
-    const techProfiles = this.getTechnicianProfiles();
-    const technicians = this.getUsers().filter((u) => u.role === 'technician');
-    const availableProfiles = techProfiles.filter((p) => p.status === 'available');
-
-    let bestTech: User | null = null;
-    let bestProfile: TechnicianProfile | null = null;
-    let bestScore = -999;
-
-    for (const prof of availableProfiles) {
-      const tech = technicians.find((t) => t.id === prof.id || t.id === prof.userId);
-      if (!tech) continue;
-
-      const activeJobs = requests.filter(
-        (r) => r.assignedTechnicianId === tech.id && ['assigned', 'accepted', 'in_progress'].includes(r.status)
-      ).length;
-      if (activeJobs >= 3) continue;
-
-      let score = 0;
-      const spec = (prof.specialty || '').toLowerCase();
-      const cat = params.category.toLowerCase();
-
-      if (spec === cat) score += 100;
-      else if (spec.includes(cat) || cat.includes(spec)) score += 80;
-      else if ((prof.additionalSkills || []).some((s) => s.toLowerCase().includes(cat))) score += 50;
-      else if (spec === 'general') score += 20;
-
-      if (score === 0) continue;
-
-      score += (prof.rating || 5) * 4;
-      score -= activeJobs * 25;
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestTech = tech;
-        bestProfile = prof;
-      }
-    }
-
-    if (bestTech && bestProfile) {
-      newRequest.status = 'assigned';
-      newRequest.assignedTechnicianId = bestTech.id;
-      newRequest.assignedTechnicianName = bestTech.fullName;
-      newRequest.assignedTechnicianPhone = bestTech.phone;
-      newRequest.assignedAt = new Date().toISOString();
-    }
-
     requests.unshift(newRequest);
     this.save(STORAGE_KEYS.REQUESTS, requests);
 
-    // Audit Log
-    if (bestTech && bestProfile) {
-      this.addLog({
-        requestId: newRequest.id,
-        fromStatus: 'pending',
-        toStatus: 'assigned',
-        changedByUserId: bestTech.id,
-        changedByName: 'AI Auto-Dispatch Engine',
-        changedByRole: 'manager',
-        note: `AI Auto-Dispatch: Automatically matched and assigned to technician ${bestTech.fullName} (${bestProfile.specialty}) based on matching skills and availability.`,
-      });
-
-      this.addNotification({
-        recipientUserId: bestTech.id,
-        title: `New Job Auto-Dispatched: ${newRequest.ticketNumber}`,
-        message: `AI dispatched ${newRequest.category} ticket "${newRequest.title}" to you based on your skills.`,
-        requestId: newRequest.id,
-        type: 'assignment',
-      });
-    } else {
-      this.addLog({
-        requestId: newRequest.id,
-        fromStatus: 'pending',
-        toStatus: 'pending',
-        changedByUserId: params.customerId,
-        changedByName: newRequest.customerName,
-        changedByRole: 'customer',
-        note: 'AI Dispatch Queue: No matching technician currently available. Placed in Pending queue for auto-assignment when a technician becomes available.',
-      });
-    }
+    this.addLog({
+      requestId: newRequest.id,
+      fromStatus: 'pending',
+      toStatus: 'pending',
+      changedByUserId: params.customerId,
+      changedByName: newRequest.customerName,
+      changedByRole: 'customer',
+      note: 'Service request submitted by customer. Awaiting Operations Manager approval before AI Dispatch.',
+    });
 
     return newRequest;
   }
 
-  public autoAssignPendingRequests(): { assigned: boolean; ticketNumber: string; techName?: string }[] {
+  public autoAssignPendingRequests(): {
+    assigned: boolean;
+    requestId: string;
+    ticketNumber: string;
+    techName?: string;
+    scheduledDate?: string;
+    scheduledTimeSlot?: string;
+  }[] {
     const requests = this.getRequests();
-    const pending = requests.filter((r) => r.status === 'pending');
-    if (!pending.length) return [];
+    // Strictly dispatch ONLY manager-approved unassigned requests
+    const approvedQueue = requests.filter(
+      (r) => r.status === 'approved' && !r.assignedTechnicianId
+    );
+    if (!approvedQueue.length) return [];
 
     const techProfiles = this.getTechnicianProfiles();
     const technicians = this.getUsers().filter((u) => u.role === 'technician');
     const availableProfiles = techProfiles.filter((p) => p.status === 'available');
-    const results: { assigned: boolean; ticketNumber: string; techName?: string }[] = [];
+    const results: {
+      assigned: boolean;
+      requestId: string;
+      ticketNumber: string;
+      techName?: string;
+      scheduledDate?: string;
+      scheduledTimeSlot?: string;
+    }[] = [];
 
-    for (const req of pending) {
+    const workingSlots = [
+      'Morning (08:00 AM – 12:00 PM)',
+      'Afternoon (12:00 PM – 04:00 PM)',
+      'Evening (04:00 PM – 08:00 PM)',
+    ];
+
+    const normalizeSlotBucket = (slot?: string): string => {
+      const s = (slot || '').toLowerCase();
+      if (s.includes('afternoon') || s.includes('12:00')) return 'afternoon';
+      if (s.includes('evening') || s.includes('04:00') || s.includes('16:00')) return 'evening';
+      return 'morning';
+    };
+
+    for (const req of approvedQueue) {
       let bestTech: User | null = null;
       let bestProf: TechnicianProfile | null = null;
       let bestScore = -999;
+      let bestDate = req.preferredDate;
+      let bestSlot = req.preferredTimeSlot || workingSlots[0];
 
       for (const prof of availableProfiles) {
         const tech = technicians.find((t) => t.id === prof.id || t.id === prof.userId);
         if (!tech) continue;
 
-        const activeJobs = requests.filter(
-          (r) => r.assignedTechnicianId === tech.id && ['assigned', 'accepted', 'in_progress'].includes(r.status)
-        ).length;
-        if (activeJobs >= 3) continue;
+        const techActiveJobs = requests.filter(
+          (r) =>
+            r.id !== req.id &&
+            r.assignedTechnicianId === tech.id &&
+            ['assigned', 'accepted', 'in_progress'].includes(r.status)
+        );
+        if (techActiveJobs.length >= 3) continue;
 
         let score = 0;
         const spec = (prof.specialty || '').toLowerCase();
         const cat = req.category.toLowerCase();
 
-        if (spec === cat) score += 100;
-        else if (spec.includes(cat) || cat.includes(spec)) score += 80;
-        else if ((prof.additionalSkills || []).some((s) => s.toLowerCase().includes(cat))) score += 50;
-        else if (spec === 'general') score += 20;
+        if (spec === cat || spec.includes(cat) || cat.includes(spec)) score += 100;
+        else if ((prof.additionalSkills || []).some((s) => s.toLowerCase().includes(cat))) score += 65;
+        else if (spec.includes('general') || spec.includes('maintenance') || cat === 'general') score += 35;
+        else score += 15; // Cross-trade available technician fallback
 
-        if (score === 0) continue;
+        // Find conflict-free date and working-hours slot
+        const todayStr = new Date().toISOString().split('T')[0];
+        const baseDate = req.preferredDate && req.preferredDate >= todayStr ? req.preferredDate : todayStr;
+        const requestedBucket = normalizeSlotBucket(req.preferredTimeSlot);
+        const canonicalRequestedSlot =
+          requestedBucket === 'afternoon'
+            ? workingSlots[1]
+            : requestedBucket === 'evening'
+            ? workingSlots[2]
+            : workingSlots[0];
+
+        const hasConflict = (d: string, sl: string) =>
+          techActiveJobs.some(
+            (job) =>
+              job.preferredDate === d &&
+              normalizeSlotBucket(job.preferredTimeSlot) === normalizeSlotBucket(sl)
+          );
+
+        let chosenDate = '';
+        let chosenSlot = '';
+
+        if (!hasConflict(baseDate, canonicalRequestedSlot)) {
+          chosenDate = baseDate;
+          chosenSlot = canonicalRequestedSlot;
+          score += 25;
+        } else {
+          for (let offset = 0; offset < 14 && !chosenDate; offset++) {
+            const dObj = new Date(baseDate + 'T00:00:00');
+            dObj.setDate(dObj.getDate() + offset);
+            const candidateDate = dObj.toISOString().split('T')[0];
+            for (const slotOption of workingSlots) {
+              if (!hasConflict(candidateDate, slotOption)) {
+                chosenDate = candidateDate;
+                chosenSlot = slotOption;
+                break;
+              }
+            }
+          }
+        }
+
+        if (!chosenDate || !chosenSlot) continue;
 
         score += (prof.rating || 5) * 4;
-        score -= activeJobs * 25;
+        score -= techActiveJobs.length * 25;
 
         if (score > bestScore) {
           bestScore = score;
           bestTech = tech;
           bestProf = prof;
+          bestDate = chosenDate;
+          bestSlot = chosenSlot;
         }
       }
 
@@ -640,23 +648,25 @@ class FixNearStore {
         req.assignedTechnicianId = bestTech.id;
         req.assignedTechnicianName = bestTech.fullName;
         req.assignedTechnicianPhone = bestTech.phone;
+        req.preferredDate = bestDate;
+        req.preferredTimeSlot = bestSlot;
         req.assignedAt = new Date().toISOString();
         req.updatedAt = new Date().toISOString();
 
         this.addLog({
           requestId: req.id,
-          fromStatus: 'pending',
+          fromStatus: 'approved',
           toStatus: 'assigned',
           changedByUserId: bestTech.id,
           changedByName: 'AI Auto-Dispatch Engine',
           changedByRole: 'manager',
-          note: `AI Auto-Dispatch: Automatically assigned pending ticket to ${bestTech.fullName} (${bestProf.specialty}) as technician became available.`,
+          note: `AI Dispatch: Assigned approved ticket to ${bestTech.fullName} (${bestProf.specialty}) scheduled for ${bestDate} (${bestSlot}).`,
         });
 
         this.addNotification({
           recipientUserId: bestTech.id,
-          title: `New Job Auto-Dispatched: ${req.ticketNumber}`,
-          message: `Pending ${req.category} ticket auto-assigned to you: "${req.title}".`,
+          title: `New Job Dispatched: ${req.ticketNumber}`,
+          message: `Approved ${req.category} ticket "${req.title}" assigned to you for ${bestDate} (${bestSlot}).`,
           requestId: req.id,
           type: 'assignment',
         });
@@ -664,12 +674,19 @@ class FixNearStore {
         this.addNotification({
           recipientUserId: req.customerId,
           title: `Technician Dispatched: ${req.ticketNumber}`,
-          message: `A technician has become available! ${bestTech.fullName} has been auto-assigned to your request.`,
+          message: `${bestTech.fullName} has been assigned to your request for ${bestDate} (${bestSlot}).`,
           requestId: req.id,
           type: 'status_change',
         });
 
-        results.push({ assigned: true, ticketNumber: req.ticketNumber, techName: bestTech.fullName });
+        results.push({
+          assigned: true,
+          requestId: req.id,
+          ticketNumber: req.ticketNumber,
+          techName: bestTech.fullName,
+          scheduledDate: bestDate,
+          scheduledTimeSlot: bestSlot,
+        });
       }
     }
 
@@ -752,7 +769,10 @@ class FixNearStore {
    * Pending → Approved
    * Done by Manager
    */
-  public approveServiceRequest(requestId: string, manager: User): { success: boolean; error?: string } {
+  public approveServiceRequest(
+    requestId: string,
+    manager: User
+  ): { success: boolean; error?: string; request?: ServiceRequest } {
     if (manager.role !== 'manager') {
       return { success: false, error: 'Only Managers can approve service requests.' };
     }
@@ -784,12 +804,12 @@ class FixNearStore {
     this.addNotification({
       recipientUserId: req.customerId,
       title: `Request Approved: ${req.ticketNumber}`,
-      message: `Your service request has been approved and is being assigned to a qualified technician.`,
+      message: `Your service request has been approved and is ready for technician dispatch.`,
       requestId: req.id,
       type: 'status_change',
     });
 
-    return { success: true };
+    return { success: true, request: req };
   }
 
   /**
@@ -799,8 +819,9 @@ class FixNearStore {
   public assignTechnician(
     requestId: string,
     technicianId: string,
-    manager: User
-  ): { success: boolean; error?: string } {
+    manager: User,
+    schedule?: { preferredDate?: string; preferredTimeSlot?: string }
+  ): { success: boolean; error?: string; request?: ServiceRequest } {
     if (manager.role !== 'manager') {
       return { success: false, error: 'Only Managers can assign technicians.' };
     }
@@ -816,7 +837,34 @@ class FixNearStore {
 
     const req = requests[index];
     if (req.status !== 'approved' && req.status !== 'assigned') {
-      return { success: false, error: `Request must be in Approved or Assigned status (currently ${req.status}).` };
+      return { success: false, error: `Request must be Approved before assigning a technician (currently ${req.status}).` };
+    }
+
+    const targetDate = schedule?.preferredDate || req.preferredDate;
+    const targetSlot = schedule?.preferredTimeSlot || req.preferredTimeSlot;
+
+    // Check for overlapping jobs for the same technician
+    const normalizeBucket = (s?: string) => {
+      const lower = (s || '').toLowerCase();
+      if (lower.includes('afternoon') || lower.includes('12:00')) return 'afternoon';
+      if (lower.includes('evening') || lower.includes('04:00') || lower.includes('16:00')) return 'evening';
+      return 'morning';
+    };
+
+    const conflictingJob = requests.find(
+      (r) =>
+        r.id !== req.id &&
+        r.assignedTechnicianId === techUser.id &&
+        ['assigned', 'accepted', 'in_progress'].includes(r.status) &&
+        r.preferredDate === targetDate &&
+        normalizeBucket(r.preferredTimeSlot) === normalizeBucket(targetSlot)
+    );
+
+    if (conflictingJob) {
+      return {
+        success: false,
+        error: `Schedule conflict: ${techUser.fullName} is already scheduled for ${conflictingJob.ticketNumber} on ${targetDate} during ${targetSlot}.`,
+      };
     }
 
     const prevStatus = req.status;
@@ -824,6 +872,8 @@ class FixNearStore {
     req.assignedTechnicianId = techUser.id;
     req.assignedTechnicianName = techUser.fullName;
     req.assignedTechnicianPhone = techUser.phone;
+    req.preferredDate = targetDate;
+    req.preferredTimeSlot = targetSlot;
     req.assignedAt = new Date().toISOString();
     req.rejectionReason = undefined; // clear any previous decline
     req.updatedAt = new Date().toISOString();
@@ -837,14 +887,14 @@ class FixNearStore {
       changedByUserId: manager.id,
       changedByName: manager.fullName,
       changedByRole: 'manager',
-      note: `Assigned to technician ${techUser.fullName} (${techUser.phone}).`,
+      note: `Assigned to technician ${techUser.fullName} (${techUser.phone}) scheduled for ${targetDate} (${targetSlot}).`,
     });
 
     // Notify Technician
     this.addNotification({
       recipientUserId: techUser.id,
       title: `New Job Assigned: ${req.ticketNumber}`,
-      message: `You have been assigned to ${req.category} ticket "${req.title}" scheduled for ${req.preferredDate}. Please review and accept.`,
+      message: `You have been assigned to ${req.category} ticket "${req.title}" scheduled for ${targetDate} (${targetSlot}). Please review and accept.`,
       requestId: req.id,
       type: 'assignment',
     });
@@ -853,12 +903,12 @@ class FixNearStore {
     this.addNotification({
       recipientUserId: req.customerId,
       title: `Technician Assigned: ${req.ticketNumber}`,
-      message: `${techUser.fullName} has been assigned to your service request.`,
+      message: `${techUser.fullName} has been assigned to your service request scheduled for ${targetDate} (${targetSlot}).`,
       requestId: req.id,
       type: 'status_change',
     });
 
-    return { success: true };
+    return { success: true, request: req };
   }
 
   /**

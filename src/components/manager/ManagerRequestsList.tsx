@@ -1,15 +1,24 @@
 import React, { useState } from 'react';
-import { ServiceRequest, ServiceStatus, PriorityLevel } from '../../types';
+import { ServiceRequest, ServiceStatus } from '../../types';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { EmptyState } from '../common/EmptyState';
-import { Search, Wrench, Calendar, MapPin, ArrowRight, UserCheck, CheckCircle2 } from 'lucide-react';
+import {
+  Search,
+  Wrench,
+  Calendar,
+  Clock,
+  MapPin,
+  ArrowRight,
+  Sparkles,
+  UserCheck,
+} from 'lucide-react';
 
 interface ManagerRequestsListProps {
   requests: ServiceRequest[];
   onSelectRequest: (request: ServiceRequest) => void;
-  onQuickApprove?: (request: ServiceRequest) => void;
-  onQuickAssign?: (request: ServiceRequest) => void;
+  onQuickApprove?: (request: ServiceRequest) => void | Promise<void>;
+  onQuickAIDispatch?: (request: ServiceRequest) => void | Promise<void>;
   defaultFilter?: ServiceStatus | 'all';
 }
 
@@ -17,19 +26,45 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
   requests,
   onSelectRequest,
   onQuickApprove,
-  onQuickAssign,
+  onQuickAIDispatch,
   defaultFilter = 'all',
 }) => {
   const [filter, setFilter] = useState<string>(defaultFilter);
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
+
+  const handleRowApprove = async (req: ServiceRequest) => {
+    if (!onQuickApprove || busyIds[req.id]) return;
+    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
+    try {
+      await onQuickApprove(req);
+    } finally {
+      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
+    }
+  };
+
+  const handleRowAIDispatch = async (req: ServiceRequest) => {
+    if (busyIds[req.id]) return;
+    if (!onQuickAIDispatch) {
+      onSelectRequest(req);
+      return;
+    }
+    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
+    try {
+      await onQuickAIDispatch(req);
+    } finally {
+      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
+    }
+  };
 
   const filteredRequests = requests.filter((r) => {
     const matchesSearch =
       r.title.toLowerCase().includes(search.toLowerCase()) ||
       r.ticketNumber.toLowerCase().includes(search.toLowerCase()) ||
       r.customerName.toLowerCase().includes(search.toLowerCase()) ||
-      (r.assignedTechnicianName && r.assignedTechnicianName.toLowerCase().includes(search.toLowerCase())) ||
+      (r.assignedTechnicianName &&
+        r.assignedTechnicianName.toLowerCase().includes(search.toLowerCase())) ||
       r.serviceAddress.city.toLowerCase().includes(search.toLowerCase());
 
     if (!matchesSearch) return false;
@@ -92,6 +127,7 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
             { id: 'pending', label: 'Pending' },
             { id: 'approved', label: 'Approved' },
             { id: 'assigned', label: 'Assigned' },
+            { id: 'accepted', label: 'Accepted' },
             { id: 'in_progress', label: 'In Progress' },
             { id: 'completed', label: 'Completed' },
             { id: 'cancelled', label: 'Cancelled' },
@@ -115,7 +151,9 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
       {filteredRequests.length === 0 ? (
         <EmptyState
           icon={Wrench}
-          title={search || filter !== 'all' ? 'No matching tickets found' : 'Dispatch queue is empty'}
+          title={
+            search || filter !== 'all' ? 'No matching tickets found' : 'Dispatch queue is empty'
+          }
           description={
             search || filter !== 'all'
               ? 'Try relaxing your filter parameters or search query.'
@@ -124,81 +162,100 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
         />
       ) : (
         <div className="divide-y divide-[#F0EBE3] bg-white border border-[#E8E2D8] rounded-xl overflow-hidden shadow-2xs">
-          {filteredRequests.map((req) => (
-            <div
-              key={req.id}
-              onClick={() => onSelectRequest(req)}
-              className="p-3.5 sm:p-5 hover:bg-[#FAF8F5] transition-colors cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 group"
-            >
-              <div className="space-y-1 sm:space-y-1.5 flex-1 min-w-0">
-                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                  <span className="text-xs font-mono font-semibold text-[#143628]">
-                    {req.ticketNumber}
-                  </span>
-                  <span className="text-[#C2DDD0]">·</span>
-                  <StatusBadge status={req.status} />
-                  <PriorityBadge priority={req.priority} />
-                  <span className="text-xs text-[#69776E] capitalize truncate">· {req.category}</span>
-                </div>
-
-                <h3 className="text-xs sm:text-base font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
-                  {req.title}
-                </h3>
-
-                <div className="flex items-center gap-3 sm:gap-4 text-xs text-slate-500 flex-wrap">
-                  <span className="font-medium text-slate-700 truncate">
-                    Customer: {req.customerName}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{req.preferredDate}</span>
-                  </span>
-                  <span className="flex items-center gap-1 truncate max-w-xs">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="truncate">
-                      {req.serviceAddress.city}, {req.serviceAddress.state}
-                    </span>
-                  </span>
-                  {req.assignedTechnicianName && (
-                    <span className="text-indigo-600 font-medium truncate">
-                      Tech: {req.assignedTechnicianName}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Actions */}
+          {filteredRequests.map((req) => {
+            const isBusy = Boolean(busyIds[req.id]);
+            return (
               <div
-                className="flex items-center justify-between lg:justify-end gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0"
-                onClick={(e) => e.stopPropagation()}
+                key={req.id}
+                onClick={() => onSelectRequest(req)}
+                className="p-3.5 sm:p-5 hover:bg-[#FAF8F5] transition-colors cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 group"
               >
-                {req.status === 'pending' && onQuickApprove && (
-                  <button
-                    onClick={() => onQuickApprove(req)}
-                    className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-colors cursor-pointer"
-                  >
-                    Approve
-                  </button>
-                )}
+                <div className="space-y-1 sm:space-y-1.5 flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    <span className="text-xs font-mono font-semibold text-[#143628]">
+                      {req.ticketNumber}
+                    </span>
+                    <span className="text-[#C2DDD0]">·</span>
+                    <StatusBadge status={req.status} />
+                    <PriorityBadge priority={req.priority} />
+                    <span className="text-xs text-[#69776E] capitalize truncate">
+                      · {req.category}
+                    </span>
+                  </div>
 
-                {req.status === 'assigned' && req.assignedTechnicianName && (
-                  <span className="text-xs text-indigo-700 bg-indigo-50 px-2 py-1 rounded border border-indigo-200 truncate max-w-[140px]">
-                    {req.assignedTechnicianName}
-                  </span>
-                )}
+                  <h3 className="text-xs sm:text-base font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
+                    {req.title}
+                  </h3>
 
-                <button
-                  onClick={() => onSelectRequest(req)}
-                  className="px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors cursor-pointer flex items-center gap-1"
+                  <div className="flex items-center gap-3 sm:gap-4 text-xs text-slate-500 flex-wrap">
+                    <span className="font-medium text-slate-700 truncate">
+                      Customer: {req.customerName}
+                    </span>
+                    <span className="flex items-center gap-1 font-mono text-slate-600">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span>{req.preferredDate}</span>
+                    </span>
+                    {req.preferredTimeSlot && (
+                      <span className="flex items-center gap-1 font-mono text-slate-600">
+                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>{req.preferredTimeSlot}</span>
+                      </span>
+                    )}
+                    <span className="flex items-center gap-1 truncate max-w-xs">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span className="truncate">
+                        {req.serviceAddress.city}, {req.serviceAddress.state}
+                      </span>
+                    </span>
+                    {req.assignedTechnicianName && (
+                      <span className="inline-flex items-center gap-1 text-indigo-700 font-semibold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 truncate">
+                        <UserCheck className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span>Tech: {req.assignedTechnicianName}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div
+                  className="flex items-center justify-between lg:justify-end gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <span>Review</span>
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-                </button>
+                  {req.status === 'pending' && onQuickApprove && (
+                    <button
+                      onClick={() => handleRowApprove(req)}
+                      disabled={isBusy}
+                      className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer"
+                    >
+                      {isBusy ? 'Approving...' : 'Approve'}
+                    </button>
+                  )}
+
+                  {req.status === 'approved' && !req.assignedTechnicianId && (
+                    <button
+                      onClick={() => handleRowAIDispatch(req)}
+                      disabled={isBusy}
+                      className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                      <span>{isBusy ? 'Dispatching...' : 'AI Dispatch'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => onSelectRequest(req)}
+                    className="px-2.5 sm:px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <span>Review</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
   );
 };
+

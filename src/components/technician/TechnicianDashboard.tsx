@@ -340,10 +340,16 @@ export const TechnicianDashboard: React.FC<TechnicianDashboardProps> = ({
                     <span className="font-medium text-[#2C3830] truncate">
                       Customer: {req.customerName}
                     </span>
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
+                    <span className="flex items-center gap-1 font-mono text-[#143628] font-semibold">
+                      <Calendar className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
                       <span>{req.preferredDate}</span>
                     </span>
+                    {req.preferredTimeSlot && (
+                      <span className="flex items-center gap-1 font-mono text-[#143628] font-semibold">
+                        <Clock className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
+                        <span>{req.preferredTimeSlot}</span>
+                      </span>
+                    )}
                     <span className="flex items-center gap-1 truncate max-w-xs">
                       <MapPin className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
                       <span className="truncate">{req.serviceAddress?.city || 'On-site'}</span>

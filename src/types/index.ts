@@ -178,6 +178,22 @@ export interface AutoDispatchResult {
   technicianPhone?: string;
   matchedCategory: ServiceCategory;
   matchedSkill: string;
+  scheduledDate?: string;
+  scheduledTimeSlot?: string;
   reason: string;
+  error?: string;
+  request?: ServiceRequest;
 }
+
+export interface AIDispatchCandidate {
+  technician: User;
+  profile: TechnicianProfile;
+  matchScore: number;
+  matchReason: string;
+  scheduledDate: string;
+  scheduledTimeSlot: string;
+  scheduleAdjusted: boolean;
+  activeWorkload: number;
+}
+
 

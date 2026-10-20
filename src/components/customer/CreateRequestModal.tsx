@@ -193,7 +193,6 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
         throw new Error(res.error || 'Failed to submit service request');
       }
 
-      // Check if auto-assigned or kept in pending
       if (res.autoDispatchedTo) {
         showToast(
           `Ticket ${res.request.ticketNumber} created! AI auto-dispatched to technician ${res.autoDispatchedTo}.`,
@@ -201,8 +200,8 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
         );
       } else {
         showToast(
-          `Ticket ${res.request.ticketNumber} created! Queued in Pending. Our system will auto-assign when a matching technician becomes available.`,
-          'info'
+          `Ticket ${res.request.ticketNumber} submitted! Pending Operations Manager approval for AI technician dispatch.`,
+          'success'
         );
       }
 

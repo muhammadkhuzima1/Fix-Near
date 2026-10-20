@@ -138,6 +138,9 @@ function MainApp() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
         refreshData();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'technician_profiles' }, () => {
+        refreshData();
+      })
       .subscribe();
 
     return () => {
@@ -233,6 +236,45 @@ function MainApp() {
     const req = requests.find((r) => r.id === requestId);
     if (req) {
       setSelectedRequest(req);
+    }
+  };
+
+  const handleQuickApprove = async (req: ServiceRequest) => {
+    const res = await SupabaseService.approveServiceRequest(req.id, currentUser);
+    if (res.success) {
+      if (res.request) {
+        setRequests((prev) => prev.map((r) => (r.id === req.id ? res.request! : r)));
+      }
+      showToast(
+        `Ticket ${req.ticketNumber} approved! Click "AI Dispatch" to assign and schedule an available technician.`,
+        'success'
+      );
+      await refreshData();
+    } else {
+      showToast(res.error || 'Failed to approve service request.', 'error');
+    }
+  };
+
+  const handleQuickAIDispatch = async (req: ServiceRequest) => {
+    if (req.status !== 'approved') {
+      showToast('Only manager-approved requests can be dispatched.', 'error');
+      return;
+    }
+
+    const result = await SupabaseService.aiDispatchServiceRequest(req.id, currentUser);
+    if (result.assigned && result.request) {
+      setRequests((prev) => prev.map((r) => (r.id === req.id ? result.request! : r)));
+      showToast(
+        `AI Dispatch confirmed: Assigned ${req.ticketNumber} to ${result.technicianName} · Scheduled for ${result.scheduledDate} (${result.scheduledTimeSlot}).`,
+        'success'
+      );
+      await refreshData();
+      setSelectedRequest(result.request);
+    } else {
+      showToast(
+        result.error || result.reason || 'No suitable available technician could be assigned.',
+        'error'
+      );
     }
   };
 
@@ -364,6 +406,8 @@ function MainApp() {
                 onSelectRequest={(req) => setSelectedRequest(req)}
                 onNavigateTab={(tab) => setCurrentTab(tab)}
                 onOpenCreateTech={() => setIsCreateTechOpen(true)}
+                onQuickApprove={handleQuickApprove}
+                onQuickAIDispatch={handleQuickAIDispatch}
               />
             )}
 
@@ -375,12 +419,8 @@ function MainApp() {
                 <ManagerRequestsList
                   requests={requests}
                   onSelectRequest={(req) => setSelectedRequest(req)}
-                  onQuickApprove={async (req) => {
-                    await SupabaseService.approveServiceRequest(req.id, currentUser);
-                    showToast(`Approved ${req.ticketNumber}. AI evaluating technicians...`, 'success');
-                    await SupabaseService.autoAssignPendingRequests();
-                    refreshData();
-                  }}
+                  onQuickApprove={handleQuickApprove}
+                  onQuickAIDispatch={handleQuickAIDispatch}
                 />
               </div>
             )}
