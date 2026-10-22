@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { UserRole, ServiceRequest } from '../../types';
+import { UserRole, ServiceRequest, ServiceCategory } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { SupabaseService } from '../../services/supabaseService';
 import { store } from '../../services/store';
+import {
+  formatHourlyRate,
+  WORKING_HOURS_DISPLAY,
+  DEFAULT_CATEGORY_RATES,
+} from '../../utils/currency';
 import {
   Wrench,
   Zap,
@@ -65,8 +70,11 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState<string | null>(null);
+  const [categoryRates, setCategoryRates] = useState<Record<ServiceCategory, number>>(() =>
+    store.getServiceCategoryRates()
+  );
 
-  // Load genuine customer feedback from Supabase on mount
+  // Load genuine customer feedback and dynamic service rates from Supabase on mount
   const loadFeedback = async () => {
     try {
       setLoadingFeedback(true);
@@ -80,8 +88,22 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
     }
   };
 
+  const loadCategoryRates = async () => {
+    try {
+      const rates = await SupabaseService.fetchServiceCategoryRates();
+      setCategoryRates(rates);
+    } catch (err) {
+      console.warn('Error loading category rates:', err);
+    }
+  };
+
   useEffect(() => {
     loadFeedback();
+    loadCategoryRates();
+    const unsub = store.subscribe(() => {
+      setCategoryRates(store.getServiceCategoryRates());
+    });
+    return unsub;
   }, []);
 
   const scrollToSection = (id: string) => {
@@ -201,42 +223,42 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
     }
   };
 
-  // Supported service categories (4 clean, essential cards)
+  // Supported service categories (4 clean, essential cards with live Supabase rates)
   const services = [
     {
-      id: 'plumbing',
+      id: 'plumbing' as ServiceCategory,
       title: 'Plumbing',
       icon: <Wrench className="w-5 h-5 text-[#143628]" />,
       description:
         'Fast diagnostics and repairs for pipe leaks, water heaters, clogged drains, and kitchen or bathroom fixtures.',
-      hourlyRate: 'PKR 2,000/hour',
+      hourlyRate: formatHourlyRate(categoryRates.plumbing || DEFAULT_CATEGORY_RATES.plumbing),
       image: plumbingImg,
     },
     {
-      id: 'electrical',
+      id: 'electrical' as ServiceCategory,
       title: 'Electrical',
       icon: <Zap className="w-5 h-5 text-[#143628]" />,
       description:
         'Certified troubleshooting for tripping breakers, faulty outlets, light fixture installations, and residential wiring.',
-      hourlyRate: 'PKR 2,200/hour',
+      hourlyRate: formatHourlyRate(categoryRates.electrical || DEFAULT_CATEGORY_RATES.electrical),
       image: electricalImg,
     },
     {
-      id: 'hvac',
+      id: 'hvac' as ServiceCategory,
       title: 'AC & HVAC',
       icon: <Flame className="w-5 h-5 text-[#143628]" />,
       description:
         'Expert cooling and heating maintenance, air conditioner servicing, thermostat calibration, and airflow repair.',
-      hourlyRate: 'PKR 2,500/hour',
+      hourlyRate: formatHourlyRate(categoryRates.hvac || DEFAULT_CATEGORY_RATES.hvac),
       image: hvacImg,
     },
     {
-      id: 'appliance',
+      id: 'appliance' as ServiceCategory,
       title: 'Appliance Repair',
       icon: <Refrigerator className="w-5 h-5 text-[#143628]" />,
       description:
         'Reliable repair service for refrigerators, washing machines, dryers, dishwashers, and major kitchen appliances.',
-      hourlyRate: 'PKR 2,000/hour',
+      hourlyRate: formatHourlyRate(categoryRates.appliance || DEFAULT_CATEGORY_RATES.appliance),
       image: applianceImg,
     },
   ];
@@ -450,13 +472,22 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
         )}
       </header>
 
+      {/* WORKING HOURS — DIRECTLY ABOVE HERO SECTION */}
+      <div className="bg-[#FAF8F5] border-b border-[#E8E2D8] pt-6 sm:pt-8 pb-5 sm:pb-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <p className="font-serif text-2xl sm:text-4xl lg:text-5xl font-bold uppercase text-[#143628] leading-[1.1] tracking-tight text-left">
+            {WORKING_HOURS_DISPLAY}
+          </p>
+        </div>
+      </div>
+
       {/* 2. HERO SECTION */}
-      <section className="relative overflow-hidden bg-[#FAF8F5] pt-12 sm:pt-20 pb-16 sm:pb-24 border-b border-[#E8E2D8]">
+      <section className="relative overflow-hidden bg-[#FAF8F5] pt-10 sm:pt-14 pb-16 sm:pb-24 border-b border-[#E8E2D8]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
             {/* Left Column */}
             <div className="lg:col-span-7 space-y-6 text-left">
-              <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#143628] bg-[#EAE4D9] px-3 py-1 rounded-md border border-[#D8CFBE]">
+              <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#143628] bg-[#EAE4D9] px-3 py-1.5 rounded-md border border-[#D8CFBE]">
                 <span>Verified Field Service</span>
               </div>
 
@@ -487,7 +518,7 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
                 </button>
               </div>
 
-              {/* Reassurance pills */}
+              {/* Reassurance Highlights */}
               <div className="pt-6 border-t border-[#E8E2D8] flex flex-wrap gap-6 text-xs text-[#526056]">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-[#143628] shrink-0" />
@@ -891,7 +922,14 @@ export const PublicHomepage: React.FC<PublicHomepageProps> = ({
 
           <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-slate-500">
             <div>© {new Date().getFullYear()} FixNear. All rights reserved.</div>
-            <div>Transparent PKR Pricing Standard.</div>
+            <div className="flex flex-wrap items-center gap-3 font-medium text-[#143628]">
+              <span className="inline-flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />
+                {WORKING_HOURS_DISPLAY}
+              </span>
+              <span className="text-[#D5CFC5]">|</span>
+              <span className="text-[#526056]">Transparent PKR Pricing Standard</span>
+            </div>
           </div>
         </div>
       </footer>

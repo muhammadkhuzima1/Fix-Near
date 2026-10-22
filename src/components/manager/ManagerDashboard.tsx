@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { ServiceRequest, User, TechnicianProfile } from '../../types';
 import { store } from '../../services/store';
+import {
+  formatHourlyPrice,
+  WORKING_HOURS_DISPLAY,
+} from '../../utils/currency';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import {
@@ -103,17 +107,28 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             <span className="text-xs font-mono text-[#A3C9B6] uppercase tracking-wider">
               Central Operations Console
             </span>
-            <span className="text-xs text-[#C8DCD1]">· Field Dispatch Supervision</span>
+            <span className="text-xs text-[#C8DCD1]">·</span>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-[#FAF8F5] bg-[#1B4332] px-2.5 py-0.5 rounded border border-[#2D6A4F]">
+              <Clock className="w-3 h-3" />
+              <span>{WORKING_HOURS_DISPLAY}</span>
+            </span>
           </div>
           <h2 className="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-[#FAF8F5] truncate">
             Welcome, {currentUser?.fullName}
           </h2>
           <p className="text-xs sm:text-sm text-[#C8DCD1] leading-relaxed">
-            Review incoming customer requests, authorize dispatches, assign field technicians, and track end-to-end resolution.
+            Review incoming customer requests, authorize dispatches during working hours (9:00 AM – 6:00 PM), manage technician fees, and track end-to-end resolution.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap shrink-0">
+          <button
+            onClick={() => onNavigateTab('technicians')}
+            className="px-3.5 py-2.5 bg-[#0E251B]/60 hover:bg-[#183D2D] text-[#C2DDD0] hover:text-white border border-[#1B4332] font-medium text-xs sm:text-sm rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <Wrench className="w-4 h-4 text-[#52B788]" />
+            <span>Fees & Techs</span>
+          </button>
           <button
             onClick={() => onNavigateTab('users')}
             className="px-3.5 py-2.5 bg-[#0E251B]/60 hover:bg-[#183D2D] text-[#C2DDD0] hover:text-white border border-[#1B4332] font-medium text-xs sm:text-sm rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -391,12 +406,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         <div className="space-y-6">
           <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 space-y-4 shadow-2xs">
             <div className="flex items-center justify-between pb-2 border-b border-[#F0EBE3] text-xs">
-              <h4 className="font-serif font-bold text-base text-[#143628]">Technician Roster</h4>
+              <h4 className="font-serif font-bold text-base text-[#143628]">
+                Technician Roster & Fees
+              </h4>
               <button
                 onClick={() => onNavigateTab('technicians')}
-                className="text-xs font-semibold text-[#143628] hover:underline"
+                className="text-xs font-semibold text-[#143628] hover:underline cursor-pointer"
               >
-                Manage
+                Edit Fees
               </button>
             </div>
 
@@ -414,13 +431,18 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               <div className="space-y-3">
                 {technicians.slice(0, 5).map((tech) => {
                   const prof =
-                    techProfiles.find((p) => p.id === tech.id) || store.getTechnicianProfile(tech.id);
+                    techProfiles.find((p) => p.id === tech.id || p.userId === tech.id) ||
+                    store.getTechnicianProfile(tech.id);
                   return (
                     <div key={tech.id} className="flex items-center justify-between text-xs gap-2 min-w-0">
                       <div className="truncate min-w-0 flex-1">
                         <div className="font-semibold text-[#1F2421] truncate">{tech.fullName}</div>
-                        <div className="text-[11px] text-[#69776E] truncate">
-                          {prof?.specialty || 'General Field Tech'}
+                        <div className="text-[11px] text-[#69776E] truncate flex items-center gap-1.5">
+                          <span>{prof?.specialty || 'General Field Tech'}</span>
+                          <span>·</span>
+                          <span className="font-mono font-semibold text-[#143628]">
+                            {formatHourlyPrice(prof?.hourlyRate, 2000)}
+                          </span>
                         </div>
                       </div>
                       <span

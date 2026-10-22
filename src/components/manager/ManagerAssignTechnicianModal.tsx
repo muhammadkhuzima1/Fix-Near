@@ -4,8 +4,21 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
 import { store } from '../../services/store';
-import { X, Wrench, Star, Check, AlertCircle, Phone, User as UserIcon } from 'lucide-react';
-import { formatHourlyPrice } from '../../utils/currency';
+import {
+  X,
+  Wrench,
+  Star,
+  Check,
+  AlertCircle,
+  Phone,
+  Clock,
+  Calendar,
+} from 'lucide-react';
+import {
+  formatHourlyPrice,
+  WORKING_TIME_SLOTS,
+  WORKING_HOURS_DISPLAY,
+} from '../../utils/currency';
 
 interface ManagerAssignTechnicianModalProps {
   isOpen: boolean;
@@ -26,6 +39,16 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
   const [selectedTechId, setSelectedTechId] = useState<string>(
     request.assignedTechnicianId || ''
   );
+  const [scheduledDate, setScheduledDate] = useState<string>(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return request.preferredDate && request.preferredDate >= today
+      ? request.preferredDate
+      : today;
+  });
+  const [scheduledTimeSlot, setScheduledTimeSlot] = useState<string>(() => {
+    const valid = WORKING_TIME_SLOTS.includes(request.preferredTimeSlot as any);
+    return valid ? request.preferredTimeSlot : WORKING_TIME_SLOTS[0];
+  });
   const [technicians, setTechnicians] = useState<User[]>([]);
   const [techProfiles, setTechProfiles] = useState<TechnicianProfile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,9 +95,20 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
     setLoading(true);
     setError(null);
 
-    const res = await SupabaseService.assignTechnician(request.id, selectedTechId, currentUser);
+    const res = await SupabaseService.assignTechnician(
+      request.id,
+      selectedTechId,
+      currentUser,
+      {
+        preferredDate: scheduledDate,
+        preferredTimeSlot: scheduledTimeSlot,
+      }
+    );
     if (res.success) {
-      showToast(`Assigned technician to ticket ${request.ticketNumber}.`, 'success');
+      showToast(
+        `Assigned technician to ticket ${request.ticketNumber} (${scheduledDate}, ${scheduledTimeSlot}).`,
+        'success'
+      );
       onSuccess();
       onClose();
     } else {
@@ -119,6 +153,51 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
           )}
 
           <div className="mt-4 sm:mt-5 space-y-4">
+            {/* Working Hours Schedule Selection */}
+            <div className="p-3.5 bg-[#FAF8F5] border border-[#E8E2D8] rounded-xl space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-xs font-bold text-[#143628] flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Appointment Schedule</span>
+                </span>
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#143628] bg-white px-2.5 py-0.5 rounded border border-[#D8CFBE]">
+                  <Clock className="w-3 h-3" />
+                  <span>{WORKING_HOURS_DISPLAY}</span>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Appointment Date
+                  </label>
+                  <input
+                    type="date"
+                    value={scheduledDate}
+                    min={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => setScheduledDate(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Working Hours Window
+                  </label>
+                  <select
+                    value={scheduledTimeSlot}
+                    onChange={(e) => setScheduledTimeSlot(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
+                  >
+                    {WORKING_TIME_SLOTS.map((slot) => (
+                      <option key={slot} value={slot}>
+                        {slot}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               Select Qualified Technician ({technicians.length} available)
             </div>

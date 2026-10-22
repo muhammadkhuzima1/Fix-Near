@@ -21,6 +21,13 @@ import {
   AIDispatchCandidate,
 } from '../types';
 import { store } from './store';
+import {
+  DEFAULT_CATEGORY_RATES,
+  WORKING_TIME_SLOTS as STANDARD_WORKING_SLOTS,
+  WORKING_HOURS_START,
+  WORKING_HOURS_END,
+  mapSpecialtyToCategory,
+} from '../utils/currency';
 
 // Helper to convert snake_case Supabase request to camelCase ServiceRequest
 export function mapSupabaseToServiceRequest(row: any): ServiceRequest {
@@ -108,7 +115,7 @@ export function mapSupabaseToServiceRequest(row: any): ServiceRequest {
     status: (row.status || 'pending') as ServiceStatus,
     serviceAddress: parsedAddress,
     preferredDate: row.preferred_date || new Date().toISOString().split('T')[0],
-    preferredTimeSlot: row.preferred_time_slot || 'Morning (08:00 AM – 12:00 PM)',
+    preferredTimeSlot: row.preferred_time_slot || '09:00 AM – 11:00 AM',
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
     assignedTechnicianId: row.assigned_technician_id || undefined,
     assignedTechnicianName: row.assigned_technician_name || undefined,
@@ -478,75 +485,180 @@ export class SupabaseService {
    * SERVICE REQUESTS CRUD & AI DISPATCH SCHEDULING ENGINE
    */
 
-  public static readonly WORKING_TIME_SLOTS = [
-    'Morning (08:00 AM – 12:00 PM)',
-    'Afternoon (12:00 PM – 04:00 PM)',
-    'Evening (04:00 PM – 08:00 PM)',
-  ] as const;
+  public static readonly WORKING_TIME_SLOTS = STANDARD_WORKING_SLOTS;
 
   private static dispatchingRequestIds = new Set<string>();
 
   /**
-   * Maps any time slot string into a normalized working-hours window (08:00 AM – 08:00 PM).
+   * Parses and validates any appointment time slot string against official working hours:
+   * Working Hours: 9:00 AM – 6:00 PM (09:00 to 18:00).
+   * - No job may start before 9:00 AM (startHour >= 9)
+   * - No job may start at or after 6:00 PM (startHour < 18)
+   * - The entire appointment must finish by 6:00 PM (endHour <= 18 and startHour + durationHours <= 18)
    */
-  public static parseTimeSlotWindow(slot?: string): {
-    bucket: 'morning' | 'afternoon' | 'evening';
+  public static validateWorkingHoursSlot(
+    slot?: string,
+    durationHours = 1
+  ): {
+    valid: boolean;
+    bucket: string;
     startHour: number;
     endHour: number;
     canonical: string;
+    error?: string;
   } {
     const raw = (slot || '').trim();
     const lower = raw.toLowerCase();
+    const minDuration = Math.max(1, Number(durationHours) || 1);
 
-    if (lower.includes('afternoon') || lower.includes('12:00 pm') || lower.includes('13:') || lower.includes('14:') || lower.includes('15:')) {
+    if (!raw) {
       return {
-        bucket: 'afternoon',
-        startHour: 12,
-        endHour: 16,
-        canonical: 'Afternoon (12:00 PM – 04:00 PM)',
+        valid: true,
+        bucket: '09-11',
+        startHour: 9,
+        endHour: 11,
+        canonical: this.WORKING_TIME_SLOTS[0],
       };
     }
 
-    if (lower.includes('evening') || lower.includes('04:00 pm') || lower.includes('4:00 pm') || lower.includes('16:') || lower.includes('17:') || lower.includes('18:') || lower.includes('19:')) {
+    // Explicit check for evening/night labels that extend past 6:00 PM
+    if (
+      lower.includes('evening') ||
+      lower.includes('night') ||
+      lower.includes('08:00 pm') ||
+      lower.includes('8:00 pm')
+    ) {
       return {
-        bucket: 'evening',
-        startHour: 16,
+        valid: false,
+        bucket: 'invalid',
+        startHour: 18,
         endHour: 20,
-        canonical: 'Evening (04:00 PM – 08:00 PM)',
+        canonical: this.WORKING_TIME_SLOTS[0],
+        error:
+          'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM). Appointments cannot start at or after 6:00 PM or extend past 6:00 PM.',
       };
     }
 
-    // Check if a custom HH:MM format was passed
-    const hourMatch = lower.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
-    if (hourMatch) {
-      let hr = parseInt(hourMatch[1], 10);
-      const meridiem = hourMatch[3];
+    const to24Hr = (hrStr: string, minStr: string, mer?: string): number => {
+      let hr = parseInt(hrStr, 10);
+      const min = parseInt(minStr, 10) / 60;
+      const meridiem = (mer || '').toLowerCase();
       if (meridiem === 'pm' && hr < 12) hr += 12;
       if (meridiem === 'am' && hr === 12) hr = 0;
+      return hr + min;
+    };
 
-      if (hr >= 12 && hr < 16) {
-        return {
-          bucket: 'afternoon',
-          startHour: 12,
-          endHour: 16,
-          canonical: 'Afternoon (12:00 PM – 04:00 PM)',
-        };
+    const matches = Array.from(lower.matchAll(/(\d{1,2}):(\d{2})\s*(am|pm)?/gi));
+    let startHour = 9;
+    let endHour = 11;
+
+    if (matches.length >= 2) {
+      startHour = to24Hr(matches[0][1], matches[0][2], matches[0][3]);
+      endHour = to24Hr(matches[1][1], matches[1][2], matches[1][3]);
+      // Handle cases like "09:00 - 01:00" without AM/PM where endHour < startHour
+      if (!matches[1][3] && endHour < startHour && endHour <= 6) {
+        endHour += 12;
       }
-      if (hr >= 16) {
-        return {
-          bucket: 'evening',
-          startHour: 16,
-          endHour: 20,
-          canonical: 'Evening (04:00 PM – 08:00 PM)',
-        };
-      }
+    } else if (matches.length === 1) {
+      startHour = to24Hr(matches[0][1], matches[0][2], matches[0][3]);
+      endHour = startHour + minDuration;
+    } else if (lower.includes('afternoon')) {
+      startHour = 13;
+      endHour = 17;
+    } else if (lower.includes('morning')) {
+      startHour = 9;
+      endHour = 12;
+    } else {
+      return {
+        valid: false,
+        bucket: 'invalid',
+        startHour: 9,
+        endHour: 11,
+        canonical: this.WORKING_TIME_SLOTS[0],
+        error: `Unrecognized appointment time "${raw}". Please select a valid slot within Working Hours: 9:00 AM – 6:00 PM.`,
+      };
+    }
+
+    if (startHour < WORKING_HOURS_START) {
+      return {
+        valid: false,
+        bucket: 'invalid',
+        startHour,
+        endHour,
+        canonical: this.WORKING_TIME_SLOTS[0],
+        error:
+          'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM). Appointments cannot start before 9:00 AM.',
+      };
+    }
+
+    if (startHour >= WORKING_HOURS_END) {
+      return {
+        valid: false,
+        bucket: 'invalid',
+        startHour,
+        endHour,
+        canonical: this.WORKING_TIME_SLOTS[0],
+        error:
+          'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM). Do not schedule any job that starts at or after 6:00 PM.',
+      };
+    }
+
+    const effectiveEndHour = Math.max(endHour, startHour + minDuration);
+    if (effectiveEndHour > WORKING_HOURS_END || endHour <= startHour) {
+      return {
+        valid: false,
+        bucket: 'invalid',
+        startHour,
+        endHour: effectiveEndHour,
+        canonical: this.WORKING_TIME_SLOTS[0],
+        error:
+          'The entire appointment must fit within working hours (9:00 AM – 6:00 PM) and finish by 6:00 PM. For example, a 1-hour job must start no later than 5:00 PM.',
+      };
+    }
+
+    // Map to canonical working-hours slot (9:00 AM – 6:00 PM)
+    let canonical: string = this.WORKING_TIME_SLOTS[0];
+    let bucket = '09-11';
+    if (startHour >= 17) {
+      canonical = this.WORKING_TIME_SLOTS[4]; // 05:00 PM – 06:00 PM
+      bucket = '17-18';
+    } else if (startHour >= 15) {
+      canonical = this.WORKING_TIME_SLOTS[3]; // 03:00 PM – 05:00 PM
+      bucket = '15-17';
+    } else if (startHour >= 13) {
+      canonical = this.WORKING_TIME_SLOTS[2]; // 01:00 PM – 03:00 PM
+      bucket = '13-15';
+    } else if (startHour >= 11) {
+      canonical = this.WORKING_TIME_SLOTS[1]; // 11:00 AM – 01:00 PM
+      bucket = '11-13';
     }
 
     return {
-      bucket: 'morning',
-      startHour: 8,
-      endHour: 12,
-      canonical: 'Morning (08:00 AM – 12:00 PM)',
+      valid: true,
+      bucket,
+      startHour,
+      endHour,
+      canonical,
+    };
+  }
+
+  /**
+   * Maps any time slot string into a normalized working-hours window (9:00 AM – 6:00 PM).
+   */
+  public static parseTimeSlotWindow(slot?: string): {
+    bucket: string;
+    startHour: number;
+    endHour: number;
+    canonical: string;
+    valid: boolean;
+  } {
+    const res = this.validateWorkingHoursSlot(slot);
+    return {
+      bucket: res.bucket,
+      startHour: res.startHour,
+      endHour: res.endHour,
+      canonical: res.canonical,
+      valid: res.valid,
     };
   }
 
@@ -554,13 +666,15 @@ export class SupabaseService {
    * Returns true if two appointment time slots overlap on the same date.
    */
   public static doTimeSlotsConflict(slotA?: string, slotB?: string): boolean {
-    const winA = this.parseTimeSlotWindow(slotA);
-    const winB = this.parseTimeSlotWindow(slotB);
-    return winA.bucket === winB.bucket || (winA.startHour < winB.endHour && winB.startHour < winA.endHour);
+    const winA = this.validateWorkingHoursSlot(slotA);
+    const winB = this.validateWorkingHoursSlot(slotB);
+    return winA.startHour < winB.endHour && winB.startHour < winA.endHour;
   }
 
   /**
-   * Normalizes an appointment date to YYYY-MM-DD and ensures it is never in the past.
+   * Normalizes an appointment date to YYYY-MM-DD in the application's local timezone
+   * and ensures it is never in the past. If current local time is >= 4:00 PM (16:00),
+   * when a 1-hour job can no longer finish by 5:00 PM today, defaults to tomorrow.
    */
   public static normalizeAppointmentDate(dateStr?: string): string {
     const now = new Date();
@@ -571,12 +685,16 @@ export class SupabaseService {
     const cleaned = (dateStr || '').trim().split('T')[0];
     const isValidFormat = /^\d{4}-\d{2}-\d{2}$/.test(cleaned);
 
-    if (isValidFormat && cleaned >= localToday) {
+    if (isValidFormat && cleaned > localToday) {
       return cleaned;
     }
 
-    // If current local hour is past 19:00 (7:00 PM), schedule starting tomorrow
-    if (now.getHours() >= 19) {
+    if (isValidFormat && cleaned === localToday && now.getHours() < WORKING_HOURS_END - 1) {
+      return cleaned;
+    }
+
+    // If current local hour is at or past 4:00 PM (16:00), a 1-hour job cannot finish by 5:00 PM today
+    if (now.getHours() >= WORKING_HOURS_END - 1) {
       const tomorrow = new Date(now.getTime() + 86400000 - now.getTimezoneOffset() * 60000)
         .toISOString()
         .split('T')[0];
@@ -596,7 +714,7 @@ export class SupabaseService {
     allRequests: ServiceRequest[];
     excludeRequestId?: string;
     extraScheduledJobs?: Array<{ technicianId: string; date: string; timeSlot: string }>;
-  }): { conflict: boolean; conflictingTicket?: string } {
+  }): { conflict: boolean; conflictingTicket?: string; conflictingSlot?: string } {
     const targetDate = (params.dateStr || '').trim().split('T')[0];
 
     for (const req of params.allRequests) {
@@ -606,7 +724,11 @@ export class SupabaseService {
 
       const reqDate = (req.preferredDate || '').trim().split('T')[0];
       if (reqDate === targetDate && this.doTimeSlotsConflict(req.preferredTimeSlot, params.timeSlot)) {
-        return { conflict: true, conflictingTicket: req.ticketNumber };
+        return {
+          conflict: true,
+          conflictingTicket: req.ticketNumber,
+          conflictingSlot: req.preferredTimeSlot,
+        };
       }
     }
 
@@ -617,7 +739,11 @@ export class SupabaseService {
           extra.date === targetDate &&
           this.doTimeSlotsConflict(extra.timeSlot, params.timeSlot)
         ) {
-          return { conflict: true, conflictingTicket: 'concurrent batch dispatch' };
+          return {
+            conflict: true,
+            conflictingTicket: 'concurrent batch dispatch',
+            conflictingSlot: extra.timeSlot,
+          };
         }
       }
     }
@@ -626,8 +752,8 @@ export class SupabaseService {
   }
 
   /**
-   * Selects a valid, conflict-free appointment date and working-hours time slot (08:00 AM – 08:00 PM)
-   * for the given technician without ever overlapping existing assignments.
+   * Selects a valid, conflict-free appointment date and working-hours time slot (8:00 AM – 5:00 PM)
+   * for the given technician without ever overlapping existing assignments or exceeding 5:00 PM.
    */
   public static findConflictFreeScheduleForTechnician(params: {
     technicianId: string;
@@ -641,17 +767,18 @@ export class SupabaseService {
     const localToday = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
       .toISOString()
       .split('T')[0];
-    const currentHour = now.getHours();
+    const currentDecimalHour = now.getHours() + now.getMinutes() / 60;
 
     const baseDate = this.normalizeAppointmentDate(params.preferredDate);
-    const requestedWindow = this.parseTimeSlotWindow(params.preferredTimeSlot);
+    const requestedValidation = this.validateWorkingHoursSlot(params.preferredTimeSlot);
 
-    const isSlotInPastOnDate = (dateStr: string, slotStr: string): boolean => {
+    const isSlotInPastOrTooLateToday = (dateStr: string, slotStr: string): boolean => {
       if (dateStr > localToday) return false;
       if (dateStr < localToday) return true;
-      const win = this.parseTimeSlotWindow(slotStr);
-      // Allow scheduling in current window if at least 1 hour remains before window ends
-      return currentHour >= win.endHour - 1;
+      const win = this.validateWorkingHoursSlot(slotStr);
+      if (!win.valid) return true;
+      // Ensure at least 1 full hour remains in the slot and before 5:00 PM (17:00)
+      return currentDecimalHour > win.endHour - 1 || currentDecimalHour > WORKING_HOURS_END - 1;
     };
 
     const countTechJobsOnDate = (dateStr: string): number => {
@@ -668,14 +795,15 @@ export class SupabaseService {
       return fromDb + fromExtra;
     };
 
-    // 1. Try customer's preferred date and canonical working-hours slot first
+    // 1. Try customer's preferred date and working-hours slot first ONLY if it is valid within 8:00 AM – 5:00 PM
     if (
-      !isSlotInPastOnDate(baseDate, requestedWindow.canonical) &&
+      requestedValidation.valid &&
+      !isSlotInPastOrTooLateToday(baseDate, requestedValidation.canonical) &&
       countTechJobsOnDate(baseDate) < 3 &&
       !this.hasTechnicianScheduleConflict({
         technicianId: params.technicianId,
         dateStr: baseDate,
-        timeSlot: requestedWindow.canonical,
+        timeSlot: requestedValidation.canonical,
         allRequests: params.allRequests,
         excludeRequestId: params.excludeRequestId,
         extraScheduledJobs: params.extraScheduledJobs,
@@ -685,12 +813,12 @@ export class SupabaseService {
       const rawSlot = (params.preferredTimeSlot || '').trim();
       return {
         scheduledDate: baseDate,
-        scheduledTimeSlot: requestedWindow.canonical,
-        scheduleAdjusted: baseDate !== rawDate || requestedWindow.canonical !== rawSlot,
+        scheduledTimeSlot: requestedValidation.canonical,
+        scheduleAdjusted: baseDate !== rawDate || requestedValidation.canonical !== rawSlot,
       };
     }
 
-    // 2. Search next available conflict-free working-hours slot across the next 14 days
+    // 2. Search next available conflict-free working-hours slot (8:00 AM – 5:00 PM) across the next 14 days
     const baseDateObj = new Date(baseDate + 'T00:00:00');
     for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
       const d = new Date(baseDateObj.getTime() + dayOffset * 86400000);
@@ -701,7 +829,7 @@ export class SupabaseService {
       }
 
       for (const slotOption of this.WORKING_TIME_SLOTS) {
-        if (isSlotInPastOnDate(candidateDate, slotOption)) {
+        if (isSlotInPastOrTooLateToday(candidateDate, slotOption)) {
           continue;
         }
         const conflictCheck = this.hasTechnicianScheduleConflict({
@@ -1019,14 +1147,14 @@ export class SupabaseService {
       return {
         bestCandidate: null,
         allCandidates: [],
-        diagnosticReason: `All available technicians have conflicting schedules across upcoming working-hour slots.`,
+        diagnosticReason: `All available technicians have conflicting appointments during working hours (9:00 AM – 6:00 PM) across upcoming dates.`,
       };
     }
 
     return {
       bestCandidate: null,
       allCandidates: [],
-      diagnosticReason: `No suitable available technician found for ${params.category} service request.`,
+      diagnosticReason: `No suitable available technician or working-hours time slot (9:00 AM – 6:00 PM) found for ${params.category} service request.`,
     };
   }
 
@@ -1216,11 +1344,28 @@ export class SupabaseService {
           };
         }
 
+        if (scheduleOverride?.preferredTimeSlot) {
+          const overrideCheck = this.validateWorkingHoursSlot(scheduleOverride.preferredTimeSlot);
+          if (!overrideCheck.valid) {
+            return {
+              assigned: false,
+              requestId: req.id,
+              ticketNumber: req.ticketNumber,
+              matchedCategory: req.category,
+              matchedSkill: '',
+              reason: 'Invalid working hours',
+              error:
+                overrideCheck.error ||
+                'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM) and appointments must finish by 6:00 PM.',
+            };
+          }
+        }
+
         const finalDate = scheduleOverride?.preferredDate
           ? this.normalizeAppointmentDate(scheduleOverride.preferredDate)
           : chosen.scheduledDate;
         const finalSlot = scheduleOverride?.preferredTimeSlot
-          ? this.parseTimeSlotWindow(scheduleOverride.preferredTimeSlot).canonical
+          ? this.validateWorkingHoursSlot(scheduleOverride.preferredTimeSlot).canonical
           : chosen.scheduledTimeSlot;
 
         const assignRes = store.assignTechnician(req.id, chosen.technician.id, manager, {
@@ -1346,13 +1491,46 @@ export class SupabaseService {
         };
       }
 
-      // Determine final scheduled appointment date and time slot
+      // Validate explicit schedule override against Working Hours: 9:00 AM – 6:00 PM
+      if (scheduleOverride?.preferredTimeSlot) {
+        const overrideValidation = this.validateWorkingHoursSlot(scheduleOverride.preferredTimeSlot);
+        if (!overrideValidation.valid) {
+          return {
+            assigned: false,
+            requestId: currentReq.id,
+            ticketNumber: currentReq.ticketNumber,
+            matchedCategory: currentReq.category,
+            matchedSkill: candidate.profile.specialty,
+            reason: 'Outside working hours',
+            error:
+              overrideValidation.error ||
+              'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM) and appointments must finish by 6:00 PM.',
+          };
+        }
+      }
+
+      // Determine final scheduled appointment date and time slot (9:00 AM – 6:00 PM)
       const finalDate = scheduleOverride?.preferredDate
         ? this.normalizeAppointmentDate(scheduleOverride.preferredDate)
         : candidate.scheduledDate;
       const finalSlot = scheduleOverride?.preferredTimeSlot
-        ? this.parseTimeSlotWindow(scheduleOverride.preferredTimeSlot).canonical
+        ? this.validateWorkingHoursSlot(scheduleOverride.preferredTimeSlot).canonical
         : candidate.scheduledTimeSlot;
+
+      const finalSlotValidation = this.validateWorkingHoursSlot(finalSlot);
+      if (!finalSlotValidation.valid) {
+        return {
+          assigned: false,
+          requestId: currentReq.id,
+          ticketNumber: currentReq.ticketNumber,
+          matchedCategory: currentReq.category,
+          matchedSkill: candidate.profile.specialty,
+          reason: 'Outside working hours',
+          error:
+            finalSlotValidation.error ||
+            'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM).',
+        };
+      }
 
       // Double-check zero overlapping schedule conflict for this technician on (finalDate, finalSlot)
       const allRequestsNow = await this.fetchServiceRequests();
@@ -1372,7 +1550,7 @@ export class SupabaseService {
           matchedCategory: currentReq.category,
           matchedSkill: candidate.profile.specialty,
           reason: 'Schedule conflict detected',
-          error: `Schedule conflict: Technician ${verifiedTech.fullName} already has an active assignment (${conflictCheck.conflictingTicket}) on ${finalDate} during ${finalSlot}. Please choose a non-overlapping appointment slot.`,
+          error: `Schedule conflict: Technician ${verifiedTech.fullName} already has an active assignment (${conflictCheck.conflictingTicket}) on ${finalDate} during ${conflictCheck.conflictingSlot || finalSlot}. Please choose a non-overlapping appointment slot within working hours (9:00 AM – 6:00 PM).`,
         };
       }
 
@@ -1727,9 +1905,27 @@ export class SupabaseService {
     technicianSummary?: string;
     attachments?: string[];
   }): Promise<{ success: boolean; request?: ServiceRequest; autoDispatchedTo?: string | null; error?: string }> {
+    // Validate working hours (9:00 AM – 6:00 PM) before creating request
+    const slotValidation = this.validateWorkingHoursSlot(params.preferredTimeSlot);
+    if (!slotValidation.valid) {
+      return {
+        success: false,
+        error:
+          slotValidation.error ||
+          'Appointments can only be scheduled during working hours (9:00 AM – 6:00 PM).',
+      };
+    }
+
+    const normalizedDate = this.normalizeAppointmentDate(params.preferredDate);
+    const canonicalSlot = slotValidation.canonical;
+
     const client = getSupabaseClient();
     if (!client) {
-      const req = store.createServiceRequest(params);
+      const req = store.createServiceRequest({
+        ...params,
+        preferredDate: normalizedDate,
+        preferredTimeSlot: canonicalSlot,
+      });
       return {
         success: true,
         request: req,
@@ -1739,6 +1935,8 @@ export class SupabaseService {
 
     try {
       const customer = await this.getProfile(params.customerId);
+      const categoryRates = await this.fetchServiceCategoryRates();
+      const applicableRate = categoryRates[params.category] || DEFAULT_CATEGORY_RATES[params.category] || 2000;
       const year = new Date().getFullYear();
       const randomSuffix = Math.floor(1000 + Math.random() * 9000);
       const ticketNumber = `FXN-${year}-${randomSuffix}`;
@@ -1757,8 +1955,8 @@ export class SupabaseService {
         priority: params.priority,
         status: 'pending' as ServiceStatus,
         service_address: params.serviceAddress,
-        preferred_date: params.preferredDate,
-        preferred_time_slot: params.preferredTimeSlot,
+        preferred_date: normalizedDate,
+        preferred_time_slot: canonicalSlot,
         attachments: params.attachments || [],
         assigned_technician_id: null,
         assigned_technician_name: null,
@@ -1766,8 +1964,8 @@ export class SupabaseService {
         assigned_at: null,
         work_notes:
           params.technicianSummary || params.requiredSkill
-            ? `[AI Technician Brief] Skill: ${params.requiredSkill || 'General'}. Summary: ${params.technicianSummary || ''}`
-            : null,
+            ? `[AI Technician Brief] Skill: ${params.requiredSkill || 'General'} | Standard Rate: PKR ${applicableRate.toLocaleString()}/hour. Summary: ${params.technicianSummary || ''}`
+            : `[Standard Category Rate] PKR ${applicableRate.toLocaleString()}/hour`,
         created_at: nowIso,
         updated_at: nowIso,
       };
@@ -1934,12 +2132,46 @@ export class SupabaseService {
         };
       }
 
+      // Check technician availability (must not be off_duty)
+      const techProfRecord = await this.getTechnicianProfile(techProfile.id);
+      if (techProfRecord && techProfRecord.status === 'off_duty') {
+        return {
+          success: false,
+          error: `Technician ${techProfile.fullName} is currently marked Off Duty and cannot be scheduled. Please select an available technician.`,
+        };
+      }
+
+      const rawSlotToValidate = schedule?.preferredTimeSlot || req.preferred_time_slot;
+      const slotValidation = this.validateWorkingHoursSlot(rawSlotToValidate);
+      if (!slotValidation.valid) {
+        return {
+          success: false,
+          error:
+            slotValidation.error ||
+            'Technicians can only be scheduled during working hours (9:00 AM – 6:00 PM) and appointments must finish by 6:00 PM.',
+        };
+      }
+
       const finalDate = schedule?.preferredDate
         ? this.normalizeAppointmentDate(schedule.preferredDate)
         : this.normalizeAppointmentDate(req.preferred_date);
-      const finalSlot = schedule?.preferredTimeSlot
-        ? this.parseTimeSlotWindow(schedule.preferredTimeSlot).canonical
-        : this.parseTimeSlotWindow(req.preferred_time_slot).canonical;
+      const finalSlot = slotValidation.canonical;
+
+      // Validate that if scheduled for today in local timezone, at least 1 hour remains before slot/workday ends
+      const now = new Date();
+      const localToday = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+        .toISOString()
+        .split('T')[0];
+      const currentDecimalHour = now.getHours() + now.getMinutes() / 60;
+      if (
+        finalDate === localToday &&
+        (currentDecimalHour > slotValidation.endHour - 1 || currentDecimalHour > WORKING_HOURS_END - 1)
+      ) {
+        return {
+          success: false,
+          error: `Cannot schedule ${finalSlot} for today (${localToday}) because less than 1 hour remains before the appointment window or working hours (9:00 AM – 6:00 PM) end. Please select a later slot or tomorrow's date.`,
+        };
+      }
 
       // Prevent overlapping schedules for the same technician
       const allRequests = await this.fetchServiceRequests();
@@ -1954,7 +2186,7 @@ export class SupabaseService {
       if (conflictCheck.conflict) {
         return {
           success: false,
-          error: `Schedule conflict: ${techProfile.fullName} is already scheduled for ticket ${conflictCheck.conflictingTicket} on ${finalDate} during ${finalSlot}.`,
+          error: `Schedule conflict: ${techProfile.fullName} is already scheduled for ticket ${conflictCheck.conflictingTicket} on ${finalDate} during ${conflictCheck.conflictingSlot || finalSlot}.`,
         };
       }
 
@@ -2634,11 +2866,14 @@ export class SupabaseService {
       const profileById = new Map<string, TechnicianProfile>();
 
       for (const d of rawProfiles) {
+        const cleanSkills = Array.isArray(d.additional_skills)
+          ? d.additional_skills.filter((s: string) => !String(s).startsWith('__rate_'))
+          : [];
         profileById.set(d.id, {
           id: d.id,
           userId: d.id,
           specialty: d.specialty || 'General Field Tech',
-          additionalSkills: d.additional_skills || [],
+          additionalSkills: cleanSkills,
           status: d.status || 'available',
           rating: d.rating ? Number(d.rating) : 5.0,
           completedJobsCount: d.completed_jobs_count ? Number(d.completed_jobs_count) : 0,
@@ -2688,11 +2923,14 @@ export class SupabaseService {
         .maybeSingle();
 
       if (!error && data) {
+        const cleanSkills = Array.isArray(data.additional_skills)
+          ? data.additional_skills.filter((s: string) => !String(s).startsWith('__rate_'))
+          : [];
         return {
           id: data.id,
           userId: data.id,
           specialty: data.specialty || 'General Field Tech',
-          additionalSkills: data.additional_skills || [],
+          additionalSkills: cleanSkills,
           status: data.status || 'available',
           rating: data.rating ? Number(data.rating) : 5.0,
           completedJobsCount: data.completed_jobs_count ? Number(data.completed_jobs_count) : 0,
@@ -2722,6 +2960,294 @@ export class SupabaseService {
     } catch (e) {
       console.error('Error fetching technician profile:', e);
       return null;
+    }
+  }
+
+  /**
+   * MANAGER FEE MANAGEMENT:
+   * Updates an individual technician's hourly rate (and optional specialty) in Supabase public.technician_profiles.
+   */
+  public static async updateTechnicianFee(
+    technicianId: string,
+    params: { hourlyRate: number; specialty?: string },
+    manager: User | null
+  ): Promise<{ success: boolean; profile?: TechnicianProfile; error?: string }> {
+    if (!manager || manager.role !== 'manager') {
+      return {
+        success: false,
+        error: 'Unauthorized: Only Operations Managers can edit technician fees.',
+      };
+    }
+
+    const numericRate = Number(params.hourlyRate);
+    if (!Number.isFinite(numericRate) || numericRate < 100 || numericRate > 500000) {
+      return {
+        success: false,
+        error: 'Please enter a valid hourly rate between PKR 100 and PKR 500,000.',
+      };
+    }
+
+    const roundedRate = Math.round(numericRate);
+    const client = getSupabaseClient();
+    if (!client) {
+      return store.updateTechnicianFee(technicianId, roundedRate, params.specialty, manager);
+    }
+
+    try {
+      const nowIso = new Date().toISOString();
+      const { data: existingRow } = await client
+        .from('technician_profiles')
+        .select('*')
+        .eq('id', technicianId)
+        .maybeSingle();
+
+      let savedRow: any = null;
+
+      if (existingRow) {
+        const updatePayload: Record<string, any> = {
+          hourly_rate: roundedRate,
+          updated_at: nowIso,
+        };
+        if (params.specialty && params.specialty.trim()) {
+          updatePayload.specialty = params.specialty.trim();
+        }
+
+        const { data: updatedRows, error: updateErr } = await client
+          .from('technician_profiles')
+          .update(updatePayload)
+          .eq('id', technicianId)
+          .select('*');
+
+        if (updateErr) {
+          return {
+            success: false,
+            error: `Failed to update technician fee in Supabase: ${updateErr.message}`,
+          };
+        }
+        savedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+      } else {
+        const insertPayload = {
+          id: technicianId,
+          specialty: params.specialty?.trim() || 'General Field Tech',
+          additional_skills: ['inspection', 'troubleshooting'],
+          status: 'available',
+          rating: 5.0,
+          completed_jobs_count: 0,
+          experience_years: 2,
+          hourly_rate: roundedRate,
+          updated_at: nowIso,
+        };
+
+        const { data: insertedRows, error: insertErr } = await client
+          .from('technician_profiles')
+          .upsert(insertPayload, { onConflict: 'id' })
+          .select('*');
+
+        if (insertErr) {
+          return {
+            success: false,
+            error: `Failed to save technician fee in Supabase: ${insertErr.message}`,
+          };
+        }
+        savedRow = Array.isArray(insertedRows) ? insertedRows[0] : insertedRows;
+      }
+
+      if (!savedRow) {
+        return {
+          success: false,
+          error:
+            'Database update returned 0 rows. Verify that your Manager profile has role = "manager" in public.profiles and RLS policies on public.technician_profiles are active.',
+        };
+      }
+
+      // Sync local store cache
+      store.updateTechnicianFee(technicianId, roundedRate, params.specialty, manager);
+
+      const cleanSkills = Array.isArray(savedRow.additional_skills)
+        ? savedRow.additional_skills.filter((s: string) => !String(s).startsWith('__rate_'))
+        : [];
+
+      const updatedProfile: TechnicianProfile = {
+        id: savedRow.id,
+        userId: savedRow.id,
+        specialty: savedRow.specialty || 'General Field Tech',
+        additionalSkills: cleanSkills,
+        status: savedRow.status || 'available',
+        rating: savedRow.rating ? Number(savedRow.rating) : 5.0,
+        completedJobsCount: savedRow.completed_jobs_count ? Number(savedRow.completed_jobs_count) : 0,
+        experienceYears: savedRow.experience_years ? Number(savedRow.experience_years) : undefined,
+        licenseNumber: savedRow.license_number || undefined,
+        hourlyRate: savedRow.hourly_rate ? Number(savedRow.hourly_rate) : roundedRate,
+      };
+
+      return { success: true, profile: updatedProfile };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Unexpected error saving technician fee.',
+      };
+    }
+  }
+
+  /**
+   * Fetches the current Service Category Hourly Rates (PKR/hour) from Supabase technician_profiles
+   * and local cache so updated prices persist across page refreshes and reflect everywhere.
+   */
+  public static async fetchServiceCategoryRates(): Promise<Record<ServiceCategory, number>> {
+    const client = getSupabaseClient();
+    const localRates = store.getServiceCategoryRates();
+
+    if (!client) {
+      return localRates;
+    }
+
+    try {
+      const { data, error } = await client
+        .from('technician_profiles')
+        .select('id, specialty, hourly_rate, additional_skills, updated_at')
+        .order('updated_at', { ascending: false });
+
+      if (error || !data || data.length === 0) {
+        return localRates;
+      }
+
+      const tagRates: Partial<Record<ServiceCategory, number>> = {};
+      const specialtyRates: Partial<Record<ServiceCategory, number>> = {};
+
+      for (const row of data) {
+        // 1. Check persisted category rate tags in additional_skills
+        if (Array.isArray(row.additional_skills)) {
+          for (const skill of row.additional_skills) {
+            const match = String(skill).match(/^__rate_(plumbing|electrical|hvac|appliance|carpentry|general):(\d+)$/);
+            if (match) {
+              const cat = match[1] as ServiceCategory;
+              const val = Number(match[2]);
+              if (val >= 100 && !tagRates[cat]) {
+                tagRates[cat] = val;
+              }
+            }
+          }
+        }
+
+        // 2. Check technician's hourly_rate by specialty
+        const hr = Number(row.hourly_rate);
+        if (hr >= 100) {
+          const cat = mapSpecialtyToCategory(row.specialty);
+          if (!specialtyRates[cat]) {
+            specialtyRates[cat] = hr;
+          }
+        }
+      }
+
+      const merged: Record<ServiceCategory, number> = {
+        plumbing: tagRates.plumbing || specialtyRates.plumbing || localRates.plumbing || DEFAULT_CATEGORY_RATES.plumbing,
+        electrical: tagRates.electrical || specialtyRates.electrical || localRates.electrical || DEFAULT_CATEGORY_RATES.electrical,
+        hvac: tagRates.hvac || specialtyRates.hvac || localRates.hvac || DEFAULT_CATEGORY_RATES.hvac,
+        appliance: tagRates.appliance || specialtyRates.appliance || localRates.appliance || DEFAULT_CATEGORY_RATES.appliance,
+        carpentry: tagRates.carpentry || specialtyRates.carpentry || localRates.carpentry || DEFAULT_CATEGORY_RATES.carpentry,
+        general: tagRates.general || specialtyRates.general || localRates.general || DEFAULT_CATEGORY_RATES.general,
+      };
+
+      // Sync local store cache
+      store.updateServiceCategoryRates(merged, false);
+      return merged;
+    } catch {
+      return localRates;
+    }
+  }
+
+  /**
+   * MANAGER SERVICE PRICE MANAGEMENT:
+   * Saves updated Service Category Hourly Rates to Supabase public.technician_profiles
+   * (updating matching technicians' hourly_rate and storing category rate tags) so updated
+   * prices persist in Supabase after refreshing the page.
+   */
+  public static async updateServiceCategoryRates(
+    rates: Partial<Record<ServiceCategory, number>>,
+    manager: User | null,
+    syncMatchingTechnicians = true
+  ): Promise<{ success: boolean; rates?: Record<ServiceCategory, number>; error?: string }> {
+    if (!manager || manager.role !== 'manager') {
+      return {
+        success: false,
+        error: 'Unauthorized: Only Operations Managers can edit service prices.',
+      };
+    }
+
+    const currentRates = await this.fetchServiceCategoryRates();
+    const nextRates: Record<ServiceCategory, number> = { ...currentRates };
+
+    for (const [key, val] of Object.entries(rates)) {
+      const cat = key as ServiceCategory;
+      const numeric = Number(val);
+      if (!Number.isFinite(numeric) || numeric < 100 || numeric > 500000) {
+        return {
+          success: false,
+          error: `Invalid hourly rate for ${cat}: Please enter an amount between PKR 100 and PKR 500,000.`,
+        };
+      }
+      nextRates[cat] = Math.round(numeric);
+    }
+
+    const client = getSupabaseClient();
+    if (!client) {
+      return store.updateServiceCategoryRates(nextRates, syncMatchingTechnicians, manager);
+    }
+
+    try {
+      const rateTags = (Object.keys(nextRates) as ServiceCategory[]).map(
+        (cat) => `__rate_${cat}:${nextRates[cat]}`
+      );
+
+      const { data: techRows, error: fetchErr } = await client
+        .from('technician_profiles')
+        .select('*');
+
+      if (fetchErr) {
+        return {
+          success: false,
+          error: `Failed to read technician_profiles in Supabase: ${fetchErr.message}`,
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+
+      if (techRows && techRows.length > 0) {
+        for (const row of techRows) {
+          const cleanSkills = Array.isArray(row.additional_skills)
+            ? row.additional_skills.filter((s: string) => !String(s).startsWith('__rate_'))
+            : [];
+          const updatedSkills = [...cleanSkills, ...rateTags];
+          const rowCat = mapSpecialtyToCategory(row.specialty);
+          const updatedHourlyRate = syncMatchingTechnicians
+            ? nextRates[rowCat] || Number(row.hourly_rate) || 2000
+            : Number(row.hourly_rate) || 2000;
+
+          const { error: updErr } = await client
+            .from('technician_profiles')
+            .update({
+              hourly_rate: updatedHourlyRate,
+              additional_skills: updatedSkills,
+              updated_at: nowIso,
+            })
+            .eq('id', row.id);
+
+          if (updErr) {
+            return {
+              success: false,
+              error: `Failed to save updated service prices to Supabase: ${updErr.message}`,
+            };
+          }
+        }
+      }
+
+      store.updateServiceCategoryRates(nextRates, syncMatchingTechnicians, manager);
+      return { success: true, rates: nextRates };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Failed to save service category prices.',
+      };
     }
   }
 

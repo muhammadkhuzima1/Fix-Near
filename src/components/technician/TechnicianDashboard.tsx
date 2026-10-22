@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { ServiceRequest, TechnicianProfile } from '../../types';
 import { SupabaseService } from '../../services/supabaseService';
-import { formatHourlyPrice } from '../../utils/currency';
+import { formatHourlyPrice, WORKING_HOURS_DISPLAY } from '../../utils/currency';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import {
@@ -169,12 +169,16 @@ export const TechnicianDashboard: React.FC<TechnicianDashboardProps> = ({
             <span className="text-xs text-[#A3C9B6] font-mono font-medium truncate">
               · Rate: {formatHourlyPrice(technicianProfile?.hourlyRate, 2000)}
             </span>
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-[#FAF8F5] bg-[#1B4332] px-2.5 py-0.5 rounded border border-[#2D6A4F]">
+              <Clock className="w-3 h-3" />
+              <span>{WORKING_HOURS_DISPLAY}</span>
+            </span>
           </div>
           <h2 className="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-[#FAF8F5] truncate">
             {currentUser?.fullName}
           </h2>
           <p className="text-xs sm:text-sm text-[#C8DCD1] leading-relaxed">
-            Manage your daily service schedule, acknowledge dispatches, and record repair resolutions.
+            Manage your daily service schedule ({WORKING_HOURS_DISPLAY}), acknowledge dispatches, and record repair resolutions.
           </p>
         </div>
 

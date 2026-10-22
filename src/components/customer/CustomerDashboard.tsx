@@ -1,6 +1,13 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { ServiceRequest } from '../../types';
+import { ServiceRequest, ServiceCategory } from '../../types';
+import { SupabaseService } from '../../services/supabaseService';
+import { store } from '../../services/store';
+import {
+  formatHourlyRate,
+  WORKING_HOURS_DISPLAY,
+  DEFAULT_CATEGORY_RATES,
+} from '../../utils/currency';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { WorkflowStepper } from '../common/WorkflowStepper';
@@ -34,6 +41,19 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   onViewAllRequests,
 }) => {
   const { currentUser } = useAuth();
+  const [categoryRates, setCategoryRates] = useState<Record<ServiceCategory, number>>(() =>
+    store.getServiceCategoryRates()
+  );
+
+  useEffect(() => {
+    SupabaseService.fetchServiceCategoryRates()
+      .then((rates) => setCategoryRates(rates))
+      .catch(() => {});
+    const unsub = store.subscribe(() => {
+      setCategoryRates(store.getServiceCategoryRates());
+    });
+    return unsub;
+  }, [requests]);
 
   const pendingCount = requests.filter((r) => r.status === 'pending').length;
   const inProgressCount = requests.filter((r) =>
@@ -54,8 +74,13 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       {/* 1. Welcome Header Hero Banner */}
       <div className="bg-[#143628] text-[#FDFBF7] rounded-2xl p-6 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-sm border border-[#1B4332]">
         <div className="space-y-2 max-w-xl min-w-0">
-          <div className="inline-flex items-center gap-2 text-xs uppercase tracking-wider font-semibold text-[#A3C9B6]">
+          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wider font-semibold text-[#A3C9B6]">
             <span>Verified Customer Account</span>
+            <span>·</span>
+            <span className="inline-flex items-center gap-1 text-[#FAF8F5] normal-case font-medium bg-[#1B4332] px-2.5 py-0.5 rounded border border-[#2D6A4F]">
+              <Clock className="w-3 h-3" />
+              {WORKING_HOURS_DISPLAY}
+            </span>
           </div>
           <h2 className="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-[#FAF8F5] truncate">
             Welcome, {currentUser?.fullName || 'Valued Customer'}
@@ -251,11 +276,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Categories Quick Glance */}
         <div className="lg:col-span-2 bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <h4 className="font-serif text-base font-bold text-[#143628]">
               Standard Hourly Rates (PKR)
             </h4>
-            <span className="text-xs text-[#69776E] font-medium">Transparent Pricing</span>
+            <span className="text-xs text-[#143628] font-medium bg-[#FAF8F5] px-2.5 py-1 rounded border border-[#E8E2D8] flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              <span>{WORKING_HOURS_DISPLAY}</span>
+            </span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -264,7 +292,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <Wrench className="w-3.5 h-3.5" />
                 <span>Plumbing</span>
               </div>
-              <div className="font-mono text-[#143628] font-bold">PKR 2,000/hr</div>
+              <div className="font-mono text-[#143628] font-bold">
+                {formatHourlyRate(categoryRates.plumbing || DEFAULT_CATEGORY_RATES.plumbing)}
+              </div>
             </div>
 
             <div className="p-3 bg-[#FAF8F5] rounded-lg border border-[#E8E2D8] space-y-1">
@@ -272,7 +302,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <Zap className="w-3.5 h-3.5" />
                 <span>Electrical</span>
               </div>
-              <div className="font-mono text-[#143628] font-bold">PKR 2,200/hr</div>
+              <div className="font-mono text-[#143628] font-bold">
+                {formatHourlyRate(categoryRates.electrical || DEFAULT_CATEGORY_RATES.electrical)}
+              </div>
             </div>
 
             <div className="p-3 bg-[#FAF8F5] rounded-lg border border-[#E8E2D8] space-y-1">
@@ -280,7 +312,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <Flame className="w-3.5 h-3.5" />
                 <span>AC / HVAC</span>
               </div>
-              <div className="font-mono text-[#143628] font-bold">PKR 2,500/hr</div>
+              <div className="font-mono text-[#143628] font-bold">
+                {formatHourlyRate(categoryRates.hvac || DEFAULT_CATEGORY_RATES.hvac)}
+              </div>
             </div>
 
             <div className="p-3 bg-[#FAF8F5] rounded-lg border border-[#E8E2D8] space-y-1">
@@ -288,7 +322,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <Refrigerator className="w-3.5 h-3.5" />
                 <span>Appliance</span>
               </div>
-              <div className="font-mono text-[#143628] font-bold">PKR 2,000/hr</div>
+              <div className="font-mono text-[#143628] font-bold">
+                {formatHourlyRate(categoryRates.appliance || DEFAULT_CATEGORY_RATES.appliance)}
+              </div>
             </div>
           </div>
         </div>
@@ -300,11 +336,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
             <span>Need Help?</span>
           </div>
           <p className="text-xs text-[#526056] leading-relaxed">
-            When creating a new request, describe the symptom (e.g. "water leaking from underneath water heater"). Our system automatically extracts priority and required tools.
+            When creating a new request, describe the symptom (e.g. "water leaking from underneath water heater"). Technicians are scheduled exclusively during {WORKING_HOURS_DISPLAY}.
           </p>
           <div className="pt-2 border-t border-[#E2DBD0] text-xs text-[#143628] font-medium flex items-center justify-between">
-            <span>Official Billing:</span>
-            <span className="font-mono font-bold">PKR Standard</span>
+            <span>Service Hours:</span>
+            <span className="font-mono font-bold">9:00 AM – 6:00 PM</span>
           </div>
         </div>
       </div>

@@ -2,8 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
+import { store } from '../../services/store';
 import { AIService } from '../../services/aiService';
-import { ServiceAddress, AIProblemAnalysis } from '../../types';
+import { ServiceAddress, AIProblemAnalysis, ServiceCategory } from '../../types';
+import {
+  WORKING_TIME_SLOTS,
+  WORKING_HOURS_DISPLAY,
+  formatHourlyRate,
+  DEFAULT_CATEGORY_RATES,
+} from '../../utils/currency';
 import { PriorityBadge } from '../common/PriorityBadge';
 import {
   X,
@@ -27,11 +34,7 @@ interface CreateRequestModalProps {
   onSuccess: (requestId: string) => void;
 }
 
-const TIME_SLOTS = [
-  'Morning (08:00 AM – 12:00 PM)',
-  'Afternoon (12:00 PM – 04:00 PM)',
-  'Evening (04:00 PM – 08:00 PM)',
-];
+const TIME_SLOTS = WORKING_TIME_SLOTS;
 
 const SUGGESTED_PROBLEMS = [
   'Water heater is leaking from the bottom valve and water is pooling on the basement floor.',
@@ -60,7 +63,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
     tomorrow.setDate(tomorrow.getDate() + 1);
     return tomorrow.toISOString().split('T')[0];
   });
-  const [preferredTimeSlot, setPreferredTimeSlot] = useState(TIME_SLOTS[0]);
+  const [preferredTimeSlot, setPreferredTimeSlot] = useState<string>(TIME_SLOTS[0]);
 
   // Service address
   const [street, setStreet] = useState('');
@@ -74,8 +77,19 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
   const [attachmentPreviews, setAttachmentPreviews] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [categoryRates, setCategoryRates] = useState<Record<ServiceCategory, number>>(() =>
+    store.getServiceCategoryRates()
+  );
 
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      SupabaseService.fetchServiceCategoryRates()
+        .then((rates) => setCategoryRates(rates))
+        .catch(() => {});
+    }
+  }, [isOpen]);
 
   // Debounced AI analysis as user types their problem description
   useEffect(() => {
@@ -321,7 +335,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                     <div className="p-2 bg-white/80 rounded-lg border border-indigo-100/80">
                       <div className="text-[10px] uppercase font-semibold text-slate-400">
                         Identified Category
@@ -329,6 +343,19 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                       <div className="font-bold text-slate-900 capitalize mt-0.5 flex items-center gap-1">
                         <Wrench className="w-3.5 h-3.5 text-indigo-600" />
                         <span>{aiAnalysis.category}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-2 bg-white/80 rounded-lg border border-indigo-100/80">
+                      <div className="text-[10px] uppercase font-semibold text-slate-400">
+                        Standard Rate
+                      </div>
+                      <div className="font-bold text-[#143628] font-mono mt-0.5">
+                        {formatHourlyRate(
+                          categoryRates[aiAnalysis.category] ||
+                            DEFAULT_CATEGORY_RATES[aiAnalysis.category] ||
+                            2000
+                        )}
                       </div>
                     </div>
 
@@ -375,9 +402,15 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
 
             {/* 2. Preferred Schedule */}
             <div className="space-y-2.5 sm:space-y-3 pt-1">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Preferred Schedule
-              </label>
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Preferred Schedule
+                </label>
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#143628] bg-[#FAF8F5] px-2.5 py-0.5 rounded border border-[#E8E2D8]">
+                  <Clock className="w-3 h-3" />
+                  <span>{WORKING_HOURS_DISPLAY}</span>
+                </span>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -395,7 +428,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Time Window
+                    Appointment Window (9:00 AM – 6:00 PM)
                   </label>
                   <select
                     value={preferredTimeSlot}

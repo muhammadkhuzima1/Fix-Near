@@ -8,7 +8,12 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
-import { formatPrice, formatHourlyPrice } from '../../utils/currency';
+import {
+  formatPrice,
+  formatHourlyPrice,
+  WORKING_TIME_SLOTS,
+  WORKING_HOURS_DISPLAY,
+} from '../../utils/currency';
 import { WorkflowStepper } from '../common/WorkflowStepper';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
@@ -33,13 +38,7 @@ interface ManagerRequestDetailModalProps {
   onRefresh: () => void | Promise<void>;
 }
 
-const WORKING_HOUR_SLOTS = [
-  '09:00 - 11:00',
-  '11:00 - 13:00',
-  '13:00 - 15:00',
-  '15:00 - 17:00',
-  '17:00 - 19:00',
-];
+const WORKING_HOUR_SLOTS = WORKING_TIME_SLOTS;
 
 export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps> = ({
   request,
@@ -444,13 +443,19 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                         AI Dispatch & Appointment Scheduling
                       </h4>
                       <p className="text-[11px] text-slate-600">
-                        Evaluates technician availability, specialty skills, active workload, and schedule conflicts
+                        Evaluates technician availability, specialty skills, active workload, and working hours (9:00 AM – 6:00 PM)
                       </p>
                     </div>
                   </div>
-                  <span className="text-[11px] font-mono font-semibold px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
-                    Manager Approved
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white text-[#143628] border border-indigo-200">
+                      <Clock className="w-3 h-3" />
+                      <span>{WORKING_HOURS_DISPLAY}</span>
+                    </span>
+                    <span className="text-[11px] font-mono font-semibold px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      Manager Approved
+                    </span>
+                  </div>
                 </div>
 
                 {previewLoading ? (
@@ -535,7 +540,7 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
 
                       <div>
                         <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                          Appointment Time Slot
+                          Working Hours Slot (9 AM – 6 PM)
                         </label>
                         <select
                           value={scheduledTimeSlot}
