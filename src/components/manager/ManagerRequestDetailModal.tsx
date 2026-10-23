@@ -1,553 +1,477 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ServiceRequest,
-  ServiceRequestLog,
+  User,
   TechnicianProfile,
+  ServiceRequestLog,
   AIDispatchCandidate,
+  ServiceCategory,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
-import {
-  formatPrice,
-  formatHourlyPrice,
-  WORKING_TIME_SLOTS,
-  WORKING_HOURS_DISPLAY,
-} from '../../utils/currency';
-import { WorkflowStepper } from '../common/WorkflowStepper';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
+import { CategoryIcon } from '../common/CategoryIcon';
+import { RescheduleSection } from '../common/RescheduleSection';
+import { PaymentSummarySection } from '../common/PaymentSummarySection';
+import {
+  formatPrice,
+  formatHourlyRate,
+  DEFAULT_CATEGORY_RATES,
+  WORKING_TIME_SLOTS,
+  WORKING_HOURS_LABEL,
+} from '../../utils/currency';
 import {
   X,
-  Calendar,
-  Clock,
+  MapPin,
   Phone,
+  Mail,
+  User as UserIcon,
+  Wrench,
   CheckCircle2,
-  AlertTriangle,
+  XCircle,
+  UserCheck,
   History,
-  Package,
+  AlertCircle,
   Star,
   Sparkles,
-  ShieldCheck,
-  UserCheck,
+  Loader2,
+  ExternalLink,
 } from 'lucide-react';
 
 interface ManagerRequestDetailModalProps {
   request: ServiceRequest;
+  currentUser?: User;
   onClose: () => void;
-  onRefresh: () => void | Promise<void>;
+  onUpdated?: () => void;
+  onRefresh?: () => void;
 }
-
-const WORKING_HOUR_SLOTS = WORKING_TIME_SLOTS;
 
 export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps> = ({
   request,
+  currentUser: propUser,
   onClose,
+  onUpdated,
   onRefresh,
 }) => {
-  const { currentUser } = useAuth();
-  const { showToast } = useToast();
-
-  // Local copy of request so UI updates immediately upon Approve / AI Dispatch / Cancel
-  const [currentRequest, setCurrentRequest] = useState<ServiceRequest>(request);
-  const [isCancelling, setIsCancelling] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [isDispatching, setIsDispatching] = useState(false);
+  const { currentUser: authUser } = useAuth();
+  const currentUser =
+    propUser ||
+    authUser || {
+      id: 'manager',
+      fullName: 'Operations Manager',
+      email: '',
+      phone: '',
+      role: 'manager',
+      createdAt: request.createdAt,
+    };
+  const triggerRefresh = () => {
+    if (onUpdated) onUpdated();
+    if (onRefresh) onRefresh();
+  };
+  const [technicians, setTechnicians] = useState<User[]>([]);
+  const [techProfiles, setTechProfiles] = useState<TechnicianProfile[]>([]);
+  const [allRequests, setAllRequests] = useState<ServiceRequest[]>([]);
   const [logs, setLogs] = useState<ServiceRequestLog[]>([]);
-  const [techProfile, setTechProfile] = useState<TechnicianProfile | null>(null);
+  const [categoryRates, setCategoryRates] =
+    useState<Record<ServiceCategory, number>>(DEFAULT_CATEGORY_RATES);
 
-  // AI Dispatch preview & confirmation state
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [candidates, setCandidates] = useState<AIDispatchCandidate[]>([]);
-  const [selectedTechId, setSelectedTechId] = useState<string>('');
-  const [scheduledDate, setScheduledDate] = useState<string>(request.preferredDate || '');
-  const [scheduledTimeSlot, setScheduledTimeSlot] = useState<string>(
-    request.preferredTimeSlot || WORKING_HOUR_SLOTS[0]
+  const [selectedTechId, setSelectedTechId] = useState(request.assignedTechnicianId || '');
+  const [scheduleDate, setScheduleDate] = useState(
+    SupabaseService.normalizeAppointmentDate(request.preferredDate)
   );
-  const [previewDiagnostic, setPreviewDiagnostic] = useState<string>('');
+  const [scheduleTimeSlot, setScheduleTimeSlot] = useState<string>(() => {
+    const check = SupabaseService.validateWorkingHoursSlot(request.preferredTimeSlot);
+    return check.valid ? check.canonical : WORKING_TIME_SLOTS[0];
+  });
 
-  // Explicit feedback banner inside the modal
-  const [dispatchBanner, setDispatchBanner] = useState<{
-    type: 'success' | 'error' | 'info';
-    title: string;
-    message: string;
-  } | null>(null);
+  const [aiCandidates, setAiCandidates] = useState<AIDispatchCandidate[]>([]);
+  const [isLoadingAI, setIsLoadingAI] = useState(false);
+  const [aiDispatchError, setAiDispatchError] = useState('');
+  const [isDispatchingAI, setIsDispatchingAI] = useState(false);
+  const [aiDispatchSuccess, setAiDispatchSuccess] = useState('');
 
-  // Keep currentRequest synced when parent prop updates
+  const [error, setError] = useState('');
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const minDateStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+    .toISOString()
+    .split('T')[0];
+
   useEffect(() => {
-    setCurrentRequest(request);
+    let isMounted = true;
+    const loadData = async () => {
+      setIsLoadingAI(true);
+      const [techs, profiles, reqs, reqLogs, rates] = await Promise.all([
+        SupabaseService.fetchTechnicians(),
+        SupabaseService.fetchTechnicianProfiles(),
+        SupabaseService.fetchServiceRequests(),
+        SupabaseService.fetchLogs(request.id),
+        SupabaseService.fetchServiceCategoryRates(),
+      ]);
+
+      if (!isMounted) return;
+      const validTechs = techs.filter((t) => t.role === 'technician');
+      setTechnicians(validTechs);
+      setTechProfiles(profiles);
+      setAllRequests(reqs);
+      setLogs(reqLogs);
+      if (rates) setCategoryRates(rates);
+
+      if (request.status === 'approved' || request.status === 'pending') {
+        const evalRes = await SupabaseService.evaluateEligibleTechnicians({
+          category: request.category,
+          priority: request.priority,
+          preferredDate: request.preferredDate,
+          preferredTimeSlot: request.preferredTimeSlot,
+          description: request.description,
+          title: request.title,
+          excludeRequestId: request.id,
+        });
+        if (!isMounted) return;
+        setAiCandidates(evalRes.allCandidates);
+        if (evalRes.bestCandidate) {
+          setAiDispatchError('');
+          if (!request.assignedTechnicianId) {
+            setSelectedTechId(evalRes.bestCandidate.technician.id);
+            setScheduleDate(evalRes.bestCandidate.scheduledDate);
+            setScheduleTimeSlot(evalRes.bestCandidate.scheduledTimeSlot);
+          }
+        } else {
+          setAiDispatchError(evalRes.diagnosticReason);
+        }
+      }
+      setIsLoadingAI(false);
+    };
+    loadData();
+    return () => {
+      isMounted = false;
+    };
   }, [request]);
 
-  const loadLogsAndTechProfile = useCallback(async (reqObj: ServiceRequest) => {
-    const data = await SupabaseService.fetchLogs(reqObj.id);
-    setLogs(data);
+  const getTechProfile = (userId: string) => techProfiles.find((p) => p.userId === userId);
+  const getActiveJobCount = (techId: string) =>
+    allRequests.filter(
+      (r) =>
+        r.id !== request.id &&
+        r.assignedTechnicianId === techId &&
+        ['assigned', 'accepted', 'in_progress'].includes(r.status)
+    ).length;
 
-    if (reqObj.assignedTechnicianId) {
-      const prof = await SupabaseService.getTechnicianProfile(reqObj.assignedTechnicianId);
-      setTechProfile(prof);
-    } else {
-      setTechProfile(null);
-    }
-  }, []);
+  const assignedTechProfile = request.assignedTechnicianId
+    ? getTechProfile(request.assignedTechnicianId)
+    : undefined;
+  const effectiveHourlyRate =
+    assignedTechProfile?.hourlyRate ||
+    categoryRates[request.category] ||
+    DEFAULT_CATEGORY_RATES[request.category] ||
+    2000;
 
-  useEffect(() => {
-    loadLogsAndTechProfile(currentRequest);
-  }, [currentRequest.id, currentRequest.assignedTechnicianId, currentRequest.status, loadLogsAndTechProfile]);
-
-  // Load AI Dispatch candidate recommendation whenever ticket is in 'approved' unassigned state
-  const loadDispatchPreview = useCallback(async (reqId: string) => {
-    setPreviewLoading(true);
-    try {
-      const preview = await SupabaseService.previewAIDispatch(reqId);
-      setCandidates(preview.allCandidates);
-      setPreviewDiagnostic(preview.error || '');
-      if (preview.candidate) {
-        setSelectedTechId(preview.candidate.technician.id);
-        setScheduledDate(preview.candidate.scheduledDate);
-        setScheduledTimeSlot(preview.candidate.scheduledTimeSlot);
-      } else {
-        setSelectedTechId('');
-      }
-    } catch (err: any) {
-      setPreviewDiagnostic(err.message || 'Unable to evaluate technician availability.');
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (currentRequest.status === 'approved' && !currentRequest.assignedTechnicianId) {
-      loadDispatchPreview(currentRequest.id);
-    }
-  }, [currentRequest.id, currentRequest.status, currentRequest.assignedTechnicianId, loadDispatchPreview]);
-
-  // When manager changes selected candidate from dropdown, sync default conflict-free schedule
-  const handleSelectCandidate = (techId: string) => {
-    setSelectedTechId(techId);
-    const found = candidates.find((c) => c.technician.id === techId);
-    if (found) {
-      setScheduledDate(found.scheduledDate);
-      setScheduledTimeSlot(found.scheduledTimeSlot);
-    }
-  };
-
-  // 1. Approve Request (Pending -> Approved)
   const handleApprove = async () => {
-    if (!currentUser || loading) return;
-    setLoading(true);
-    setDispatchBanner(null);
-    try {
-      const res = await SupabaseService.approveServiceRequest(currentRequest.id, currentUser);
-      if (res.success) {
-        const updatedReq = res.request || { ...currentRequest, status: 'approved' as const };
-        setCurrentRequest(updatedReq);
-        showToast(
-          `Ticket ${currentRequest.ticketNumber} approved! Ready for AI Dispatch & Scheduling.`,
-          'success'
-        );
-        setDispatchBanner({
-          type: 'info',
-          title: 'Request Approved — Ready for AI Dispatch',
-          message:
-            'Review the AI-matched available technician and appointment schedule below, then click "Confirm AI Dispatch & Schedule" to assign and save to Supabase.',
-        });
-        await loadLogsAndTechProfile(updatedReq);
-        await loadDispatchPreview(updatedReq.id);
-        await onRefresh();
-      } else {
-        const errMsg = res.error || 'Failed to approve service request.';
-        setDispatchBanner({
-          type: 'error',
-          title: 'Approval Failed',
-          message: errMsg,
-        });
-        showToast(errMsg, 'error');
-      }
-    } catch (err: any) {
-      const errMsg = err.message || 'Unexpected error approving request.';
-      setDispatchBanner({
-        type: 'error',
-        title: 'Approval Error',
-        message: errMsg,
-      });
-      showToast(errMsg, 'error');
-    } finally {
-      setLoading(false);
+    setError('');
+    setIsSubmitting(true);
+    const res = await SupabaseService.approveServiceRequest(request.id, currentUser);
+    setIsSubmitting(false);
+
+    if (!res.success) {
+      setError(res.error || 'Could not approve request.');
+      return;
     }
+    triggerRefresh();
   };
 
-  // 2. Confirm AI Dispatch & Save Assignment + Schedule to Supabase
   const handleConfirmAIDispatch = async () => {
-    if (!currentUser) return;
-    if (isDispatching || loading) return;
-
-    if (currentRequest.status !== 'approved') {
-      const msg =
-        currentRequest.status === 'pending'
-          ? 'Please approve this service request before running AI Dispatch.'
-          : `Ticket ${currentRequest.ticketNumber} is already in "${currentRequest.status}" status.`;
-      setDispatchBanner({
-        type: 'error',
-        title: 'Cannot Dispatch Request',
-        message: msg,
-      });
-      showToast(msg, 'error');
+    setError('');
+    setAiDispatchSuccess('');
+    if (request.status !== 'approved') {
+      setError('Approve this request first before running AI Dispatch.');
       return;
     }
 
-    setIsDispatching(true);
-    setLoading(true);
-    setDispatchBanner(null);
+    const slotValidation = SupabaseService.validateWorkingHoursSlot(scheduleTimeSlot);
+    if (!slotValidation.valid) {
+      setError(
+        slotValidation.error || `Appointments must fit within ${WORKING_HOURS_LABEL}.`
+      );
+      return;
+    }
 
+    setIsDispatchingAI(true);
     try {
-      const result = await SupabaseService.aiDispatchServiceRequest(
-        currentRequest.id,
+      const dispatchRes = await SupabaseService.aiDispatchServiceRequest(
+        request.id,
         currentUser,
         {
           technicianId: selectedTechId || undefined,
-          preferredDate: scheduledDate || undefined,
-          preferredTimeSlot: scheduledTimeSlot || undefined,
+          preferredDate: scheduleDate,
+          preferredTimeSlot: slotValidation.canonical,
         }
       );
 
-      if (result.assigned && result.request) {
-        setCurrentRequest(result.request);
-        await loadLogsAndTechProfile(result.request);
-
-        const successMsg = `Assigned to ${result.technicianName} (${result.matchedSkill}) · Scheduled for ${result.scheduledDate} (${result.scheduledTimeSlot}).`;
-        setDispatchBanner({
-          type: 'success',
-          title: 'AI Dispatch Confirmed & Saved',
-          message: successMsg,
-        });
-        showToast(
-          `AI Dispatch confirmed: ${result.technicianName} scheduled for ${result.scheduledDate} (${result.scheduledTimeSlot}).`,
-          'success'
-        );
-
-        await onRefresh();
-      } else {
-        const errText =
-          result.error ||
-          result.reason ||
-          'No suitable available technician could be assigned and scheduled.';
-        setDispatchBanner({
-          type: 'error',
-          title: 'AI Dispatch Could Not Complete Assignment',
-          message: errText,
-        });
-        showToast(errText, 'error');
-        // Refresh preview in case state changed
-        await loadDispatchPreview(currentRequest.id);
+      if (!dispatchRes.assigned) {
+        setError(dispatchRes.error || dispatchRes.reason || 'AI Dispatch could not assign a technician.');
+        return;
       }
+
+      setAiDispatchSuccess(
+        `Assigned to ${dispatchRes.technicianName} for ${dispatchRes.scheduledDate} (${dispatchRes.scheduledTimeSlot}).`
+      );
+      triggerRefresh();
     } catch (err: any) {
-      const errText = err.message || 'An unexpected error occurred during AI Dispatch.';
-      setDispatchBanner({
-        type: 'error',
-        title: 'AI Dispatch Failed',
-        message: errText,
-      });
-      showToast(errText, 'error');
+      setError(err.message || 'Error during AI Dispatch.');
     } finally {
-      setIsDispatching(false);
-      setLoading(false);
+      setIsDispatchingAI(false);
     }
   };
 
-  // 3. Cancel Request (Pending/Active -> Cancelled)
-  const handleCancel = async (e: React.FormEvent) => {
+  const handleAssignManual = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
-    if (!cancelReason.trim()) {
-      showToast('Please state a reason for cancellation.', 'error');
+    setError('');
+    setAiDispatchSuccess('');
+    if (!selectedTechId) {
+      setError('Select a technician to assign.');
       return;
     }
 
-    setLoading(true);
-    const res = await SupabaseService.cancelServiceRequest(
-      currentRequest.id,
-      cancelReason,
-      currentUser
-    );
-    if (res.success) {
-      const updatedReq: ServiceRequest = {
-        ...currentRequest,
-        status: 'cancelled',
-        cancellationReason: cancelReason,
-        cancelledAt: new Date().toISOString(),
-      };
-      setCurrentRequest(updatedReq);
-      showToast(`Ticket ${currentRequest.ticketNumber} was cancelled.`, 'info');
-      setIsCancelling(false);
-      await loadLogsAndTechProfile(updatedReq);
-      await onRefresh();
-    } else {
-      showToast(res.error || 'Failed to cancel request.', 'error');
+    const slotValidation = SupabaseService.validateWorkingHoursSlot(scheduleTimeSlot);
+    if (!slotValidation.valid) {
+      setError(
+        slotValidation.error || `Appointments must fit within ${WORKING_HOURS_LABEL}.`
+      );
+      return;
     }
-    setLoading(false);
+
+    setIsSubmitting(true);
+    const res = await SupabaseService.assignTechnician(
+      request.id,
+      selectedTechId,
+      currentUser,
+      {
+        preferredDate: scheduleDate,
+        preferredTimeSlot: slotValidation.canonical,
+      }
+    );
+    setIsSubmitting(false);
+
+    if (!res.success) {
+      setError(res.error || 'Could not assign technician.');
+      return;
+    }
+    setAiDispatchSuccess(
+      `Assigned to ${res.request?.assignedTechnicianName || 'technician'} for ${scheduleDate} (${slotValidation.canonical}).`
+    );
+    triggerRefresh();
   };
 
-  const canApprove = currentRequest.status === 'pending';
-  const canAutoDispatch =
-    currentRequest.status === 'approved' && !currentRequest.assignedTechnicianId;
-  const canCancel =
-    currentRequest.status !== 'completed' && currentRequest.status !== 'cancelled';
+  const handleCancel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelReason.trim()) {
+      setError('Provide a cancellation reason.');
+      return;
+    }
+    setIsSubmitting(true);
+    const res = await SupabaseService.cancelServiceRequest(
+      request.id,
+      cancelReason.trim(),
+      currentUser
+    );
+    setIsSubmitting(false);
 
-  const activeCandidate =
-    candidates.find((c) => c.technician.id === selectedTechId) || candidates[0] || null;
+    if (!res.success) {
+      setError(res.error || 'Could not cancel request.');
+      return;
+    }
+    triggerRefresh();
+    onClose();
+  };
+
+  const bestCandidate = aiCandidates[0] || null;
+  const hasCoords =
+    typeof request.serviceAddress.latitude === 'number' &&
+    typeof request.serviceAddress.longitude === 'number';
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-      />
-
-      <div className="min-h-screen px-2 sm:px-4 text-center flex items-center justify-center py-4">
-        <div className="relative bg-white text-left rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-7 z-10 box-border">
-          {/* Header */}
-          <div className="flex items-start justify-between pb-3 sm:pb-4 border-b border-slate-200 gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
-                <span className="text-xs font-mono font-semibold text-slate-500">
-                  {currentRequest.ticketNumber}
-                </span>
-                <span className="text-slate-300">·</span>
-                <StatusBadge status={currentRequest.status} />
-                <PriorityBadge priority={currentRequest.priority} />
-                <span className="text-xs text-[#69776E] capitalize truncate">
-                  · {currentRequest.category}
-                </span>
-              </div>
-              <h2 className="font-serif text-lg sm:text-2xl font-bold text-[#143628] truncate">
-                {currentRequest.title}
-              </h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl border border-[#E6E1D6] shadow-2xl max-w-4xl w-full overflow-hidden my-8">
+        {/* Header */}
+        <div className="px-6 py-4 bg-[#FAF8F5] border-b border-[#E6E1D6] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#143628]/10 text-[#143628] flex items-center justify-center">
+              <CategoryIcon category={request.category} className="w-5 h-5" />
             </div>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-[#69776E] hover:text-[#143628] rounded-lg hover:bg-[#FAF8F5] transition-colors shrink-0 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-[#143628] bg-[#143628]/10 px-2 py-0.5 rounded">
+                  {request.ticketNumber}
+                </span>
+                <StatusBadge status={request.status} size="sm" />
+                <PriorityBadge priority={request.priority} size="sm" />
+              </div>
+              <h2 className="text-base font-bold text-[#18181B] mt-1">{request.title}</h2>
+            </div>
           </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-          <div className="mt-4 sm:mt-5 space-y-4 sm:space-y-6">
-            {/* Status Stepper */}
-            <div className="p-3.5 sm:p-4 bg-[#FAF8F5] border border-[#E8E2D8] rounded-xl overflow-hidden">
-              <WorkflowStepper
-                status={currentRequest.status}
-                cancellationReason={currentRequest.cancellationReason}
-                cancelledAt={currentRequest.cancelledAt}
-              />
+        <div className="p-5 sm:p-6 space-y-5 max-h-[82vh] overflow-y-auto">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{error}</span>
             </div>
+          )}
 
-            {/* Dispatch Feedback Banner */}
-            {dispatchBanner && (
-              <div
-                className={`p-3.5 sm:p-4 rounded-xl border flex items-start gap-3 ${
-                  dispatchBanner.type === 'success'
-                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                    : dispatchBanner.type === 'error'
-                    ? 'bg-rose-50 border-rose-300 text-rose-950'
-                    : 'bg-indigo-50 border-indigo-200 text-indigo-950'
-                }`}
-              >
-                {dispatchBanner.type === 'success' ? (
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                ) : dispatchBanner.type === 'error' ? (
-                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                ) : (
-                  <Sparkles className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs sm:text-sm font-bold">{dispatchBanner.title}</div>
-                  <p className="text-xs mt-0.5 leading-relaxed break-words">
-                    {dispatchBanner.message}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDispatchBanner(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
+          {aiDispatchSuccess && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800 font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{aiDispatchSuccess}</span>
+            </div>
+          )}
 
-            {/* Manager Primary Workflow Actions */}
-            <div className="p-4 sm:p-5 bg-[#143628] text-[#FDFBF7] rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 border border-[#1B4332]">
-              <div className="min-w-0">
-                <div className="text-xs font-mono text-[#A3C9B6] uppercase tracking-wider">
-                  Dispatch Operations Action
-                </div>
-                <div className="text-xs sm:text-sm font-semibold mt-0.5 truncate">
-                  {currentRequest.status === 'pending'
-                    ? 'Step 1: Approve Service Request Before Dispatch'
-                    : currentRequest.status === 'approved'
-                    ? 'Step 2: Approved — Ready for AI Dispatch & Scheduling'
-                    : currentRequest.status === 'assigned'
-                    ? `Dispatched to ${currentRequest.assignedTechnicianName || 'Technician'} · ${currentRequest.preferredDate} (${currentRequest.preferredTimeSlot})`
-                    : `Status: ${currentRequest.status.replace('_', ' ').toUpperCase()}`}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap shrink-0">
-                {canApprove && (
+          {/* Manager Approval & Dispatch Controls */}
+          {request.status !== 'completed' && request.status !== 'cancelled' && (
+            <div className="bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl p-4 space-y-4">
+              {request.status === 'pending' && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#E6E1D6]">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                      Step 1: Approve Request
+                    </h4>
+                    <p className="text-xs text-[#5C5852] mt-0.5">
+                      Approve this request to unlock technician dispatch.
+                    </p>
+                  </div>
                   <button
                     onClick={handleApprove}
-                    disabled={loading}
-                    className="px-3.5 sm:px-4 py-2 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 rounded-lg transition-colors cursor-pointer shadow-sm"
+                    disabled={isSubmitting}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0"
                   >
-                    {loading ? 'Approving...' : 'Approve Ticket'}
+                    <CheckCircle2 className="w-4 h-4" />
+                    Approve Request
                   </button>
-                )}
-
-                {canAutoDispatch && (
-                  <button
-                    onClick={handleConfirmAIDispatch}
-                    disabled={loading || isDispatching}
-                    className="px-3.5 sm:px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                    <span>
-                      {isDispatching ? 'Dispatching...' : 'AI Dispatch'}
-                    </span>
-                  </button>
-                )}
-
-                {canCancel && !isCancelling && (
-                  <button
-                    onClick={() => setIsCancelling(true)}
-                    disabled={loading}
-                    className="px-3 py-2 text-xs font-medium text-rose-300 hover:text-rose-100 hover:bg-rose-950/60 rounded-lg transition-colors cursor-pointer"
-                  >
-                    Cancel Ticket
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* AI Dispatch & Conflict-Free Appointment Scheduling Card (shown when status === 'approved') */}
-            {canAutoDispatch && (
-              <div className="p-4 sm:p-5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-4">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
-                      <Sparkles className="w-4 h-4 text-amber-300" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs sm:text-sm font-bold text-slate-900">
-                        AI Dispatch & Appointment Scheduling
-                      </h4>
-                      <p className="text-[11px] text-slate-600">
-                        Evaluates technician availability, specialty skills, active workload, and working hours (9:00 AM – 6:00 PM)
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white text-[#143628] border border-indigo-200">
-                      <Clock className="w-3 h-3" />
-                      <span>{WORKING_HOURS_DISPLAY}</span>
-                    </span>
-                    <span className="text-[11px] font-mono font-semibold px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      Manager Approved
-                    </span>
-                  </div>
                 </div>
+              )}
 
-                {previewLoading ? (
-                  <div className="p-4 bg-white rounded-lg border border-indigo-100 text-xs text-slate-600 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-indigo-600 animate-spin" />
-                    <span>Scanning available technicians and checking appointment schedules in Supabase...</span>
-                  </div>
-                ) : activeCandidate ? (
-                  <div className="space-y-3.5">
-                    {/* Matched Technician Summary */}
-                    <div className="p-3.5 bg-white rounded-xl border border-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-full bg-[#143628] text-white flex items-center justify-center font-bold text-sm shrink-0">
-                          {activeCandidate.technician.fullName.charAt(0)}
+              {(request.status === 'approved' ||
+                request.status === 'assigned' ||
+                request.status === 'accepted') && (
+                <div className="space-y-3">
+                  {/* AI Dispatch Recommendation */}
+                  {request.status === 'approved' && (
+                    <div className="bg-white rounded-xl p-3.5 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#143628]">
+                          <Sparkles className="w-4 h-4 text-amber-500" />
+                          <span>AI Dispatch Recommendation</span>
                         </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-bold text-slate-900">
-                              {activeCandidate.technician.fullName}
-                            </span>
-                            <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              Available
-                            </span>
-                            <span className="text-xs text-amber-600 font-semibold flex items-center gap-0.5">
-                              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                              {activeCandidate.profile.rating.toFixed(1)}
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-600 mt-0.5">
-                            Specialty:{' '}
-                            <span className="font-semibold text-slate-800">
-                              {activeCandidate.profile.specialty}
-                            </span>{' '}
-                            · Active Load:{' '}
-                            <span className="font-mono font-semibold">
-                              {activeCandidate.activeWorkload} job(s)
-                            </span>{' '}
-                            · Rate:{' '}
-                            <span className="font-mono font-semibold text-emerald-700">
-                              {formatHourlyPrice(activeCandidate.profile.hourlyRate, 2000)}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-indigo-700 mt-1 font-medium">
-                            {activeCandidate.matchReason}
-                          </div>
-                        </div>
+                        {isLoadingAI ? (
+                          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Checking skill match & schedule availability...
+                          </p>
+                        ) : bestCandidate ? (
+                          <p className="text-xs text-[#5C5852] mt-1">
+                            Best Match: <strong className="text-[#18181B]">{bestCandidate.technician.fullName}</strong> ({bestCandidate.profile.specialty}) · {bestCandidate.scheduledDate} · {bestCandidate.scheduledTimeSlot}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-amber-800 mt-1">
+                            {aiDispatchError || 'No available specialist found.'}
+                          </p>
+                        )}
                       </div>
+
+                      {bestCandidate && (
+                        <button
+                          type="button"
+                          onClick={handleConfirmAIDispatch}
+                          disabled={isDispatchingAI || isSubmitting}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0"
+                        >
+                          {isDispatchingAI ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Dispatching...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                              Confirm AI Dispatch
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Manual Assignment / Schedule Override */}
+                  <form onSubmit={handleAssignManual} className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#5C5852] flex items-center gap-1.5">
+                        <UserCheck className="w-3.5 h-3.5 text-[#143628]" />
+                        {request.assignedTechnicianId ? 'Reassign Technician' : 'Assign Technician'}
+                      </label>
+                      <span className="text-[11px] font-semibold text-[#143628]">
+                        {WORKING_HOURS_LABEL}
+                      </span>
                     </div>
 
-                    {/* Technician Selector (if multiple eligible technicians exist) & Appointment Date/Time */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                       <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                          Eligible Technician ({candidates.length})
+                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
+                          Technician
                         </label>
                         <select
                           value={selectedTechId}
-                          onChange={(e) => handleSelectCandidate(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-medium focus:outline-none focus:border-indigo-600"
+                          onChange={(e) => setSelectedTechId(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
                         >
-                          {candidates.map((cand, idx) => (
-                            <option key={cand.technician.id} value={cand.technician.id}>
-                              {idx === 0 ? '★ AI Best Match: ' : ''}
-                              {cand.technician.fullName} ({cand.profile.specialty} · {cand.activeWorkload} active)
-                            </option>
-                          ))}
+                          <option value="">-- Select Technician --</option>
+                          {technicians.map((tech) => {
+                            const prof = getTechProfile(tech.id);
+                            const activeCount = getActiveJobCount(tech.id);
+                            return (
+                              <option
+                                key={tech.id}
+                                value={tech.id}
+                                disabled={prof?.status === 'off_duty'}
+                              >
+                                {tech.fullName} — {prof?.specialty || 'General'} ({activeCount}/3 jobs)
+                              </option>
+                            );
+                          })}
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                          Appointment Date
+                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
+                          Date
                         </label>
                         <input
                           type="date"
-                          value={scheduledDate}
-                          min={new Date().toISOString().split('T')[0]}
-                          onChange={(e) => setScheduledDate(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-indigo-600"
+                          min={minDateStr}
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                          Working Hours Slot (9 AM – 6 PM)
+                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
+                          Time Slot
                         </label>
                         <select
-                          value={scheduledTimeSlot}
-                          onChange={(e) => setScheduledTimeSlot(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-indigo-600"
+                          value={scheduleTimeSlot}
+                          onChange={(e) => setScheduleTimeSlot(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
                         >
-                          {WORKING_HOUR_SLOTS.map((slot) => (
+                          {WORKING_TIME_SLOTS.map((slot) => (
                             <option key={slot} value={slot}>
                               {slot}
                             </option>
@@ -556,347 +480,201 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-3 pt-1 flex-wrap">
-                      <div className="text-[11px] text-slate-600 flex items-center gap-1.5">
-                        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>
-                          Zero overlapping jobs on {scheduledDate} ({scheduledTimeSlot})
-                        </span>
-                      </div>
-
+                    <div className="flex justify-end">
                       <button
-                        type="button"
-                        onClick={handleConfirmAIDispatch}
-                        disabled={loading || isDispatching}
-                        className="px-4 py-2.5 text-xs font-semibold bg-[#143628] hover:bg-[#1B4332] disabled:opacity-50 text-white rounded-lg transition-colors cursor-pointer shadow-sm flex items-center gap-2"
+                        type="submit"
+                        disabled={isSubmitting || isDispatchingAI}
+                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-xs font-semibold rounded-xl"
                       >
-                        <UserCheck className="w-4 h-4 text-emerald-300" />
-                        <span>
-                          {isDispatching
-                            ? 'Assigning & Saving Schedule...'
-                            : `Confirm AI Dispatch & Schedule (${activeCandidate.technician.fullName})`}
-                        </span>
+                        {request.assignedTechnicianId ? 'Save Reassignment' : 'Assign Technician'}
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-bold">No Available Technician Currently Eligible</div>
-                      <p className="mt-0.5 text-amber-800 leading-relaxed">
-                        {previewDiagnostic ||
-                          'All technicians are either off-duty, currently on an active job, or have conflicting schedules.'}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Cancellation Form */}
-            {isCancelling && (
-              <form
-                onSubmit={handleCancel}
-                className="p-3.5 sm:p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-3"
-              >
-                <h4 className="text-xs sm:text-sm font-semibold text-rose-900">
-                  Cancel Service Ticket
-                </h4>
-                <p className="text-xs text-rose-700">
-                  State administrative reason for cancellation:
-                </p>
-                <input
-                  type="text"
-                  required
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="Administrative reason for cancellation..."
-                  className="w-full px-3 py-2 text-xs bg-white border border-rose-300 rounded-lg text-slate-900 focus:outline-none min-w-0"
-                />
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsCancelling(false)}
-                    className="px-3 py-1.5 text-xs text-slate-600 hover:bg-white rounded-md cursor-pointer"
-                  >
-                    Keep Ticket
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md cursor-pointer"
-                  >
-                    Confirm Cancellation
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* Assigned Technician & Confirmed Schedule Card (if assigned) */}
-            {currentRequest.assignedTechnicianName && (
-              <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
-                    {currentRequest.assignedTechnicianName.charAt(0)}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs text-indigo-700 font-semibold uppercase tracking-wider font-mono">
-                      Assigned Field Technician
-                    </div>
-                    <div className="text-sm font-bold text-slate-900 truncate">
-                      {currentRequest.assignedTechnicianName}
-                      {techProfile?.specialty ? ` · ${techProfile.specialty}` : ''}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-slate-600 font-mono">
-                      {currentRequest.assignedTechnicianPhone && (
-                        <span className="flex items-center gap-1">
-                          <Phone className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{currentRequest.assignedTechnicianPhone}</span>
-                        </span>
-                      )}
-                      <span className="flex items-center gap-1 text-indigo-900 font-semibold bg-white px-2 py-0.5 rounded border border-indigo-200">
-                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>Scheduled: {currentRequest.preferredDate}</span>
-                      </span>
-                      <span className="flex items-center gap-1 text-indigo-900 font-semibold bg-white px-2 py-0.5 rounded border border-indigo-200">
-                        <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>{currentRequest.preferredTimeSlot || '09:00 - 11:00'}</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="text-left sm:text-right shrink-0">
-                  <div className="text-xs font-mono font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 inline-block">
-                    Rate: {formatHourlyPrice(techProfile?.hourlyRate, 2000)}
-                  </div>
-                  <div className="text-[11px] text-slate-500 font-mono mt-1 capitalize">
-                    Status: {currentRequest.status.replace('_', ' ')}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Customer & Location */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-              <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Customer Profile & Contact
-                </h4>
-                <div className="text-sm font-semibold text-slate-900 truncate">
-                  {currentRequest.customerName}
-                </div>
-                <div className="text-xs text-slate-600 font-mono truncate">
-                  Phone: {currentRequest.customerPhone}
-                </div>
-                <div className="text-xs text-slate-500 font-mono truncate">
-                  Email: {currentRequest.customerEmail}
-                </div>
-              </div>
-
-              <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Service Address & Appointment Slot
-                </h4>
-                <div className="text-xs sm:text-sm text-slate-800 break-words">
-                  {currentRequest.serviceAddress.street}
-                  {currentRequest.serviceAddress.unit
-                    ? `, ${currentRequest.serviceAddress.unit}`
-                    : ''}
-                </div>
-                <div className="text-xs text-slate-500">
-                  {currentRequest.serviceAddress.city}, {currentRequest.serviceAddress.state}{' '}
-                  {currentRequest.serviceAddress.zip}
-                </div>
-                <div className="pt-1 text-xs text-slate-700 font-mono flex flex-wrap items-center gap-3">
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{currentRequest.preferredDate}</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{currentRequest.preferredTimeSlot || '09:00 - 11:00'}</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Description & Attachments */}
-            <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl space-y-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Detailed Issue Description
-              </h4>
-              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">
-                {currentRequest.description}
-              </p>
-
-              {currentRequest.workNotes && currentRequest.status !== 'completed' && (
-                <div className="pt-2 mt-2 border-t border-slate-100 text-xs text-slate-600 font-mono whitespace-pre-wrap">
-                  {currentRequest.workNotes}
-                </div>
-              )}
-
-              {currentRequest.attachments && currentRequest.attachments.length > 0 && (
-                <div className="pt-2">
-                  <div className="text-xs text-slate-400 mb-1.5">Attached Photos:</div>
-                  <div className="flex flex-wrap gap-2">
-                    {currentRequest.attachments.map((img, idx) => (
-                      <a
-                        key={idx}
-                        href={img}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="w-14 h-14 rounded-md border border-slate-200 overflow-hidden block"
-                      >
-                        <img src={img} alt="Attachment" className="w-full h-full object-cover" />
-                      </a>
-                    ))}
-                  </div>
+                  </form>
                 </div>
               )}
             </div>
+          )}
 
-            {/* Completion & Resolution details (if completed) */}
-            {currentRequest.status === 'completed' && (
-              <div className="p-3.5 sm:p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2.5">
-                <div className="flex items-center gap-2 text-emerald-900 font-semibold text-sm">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Completion Record</span>
-                </div>
-                <p className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words">
-                  {currentRequest.resolutionSummary}
-                </p>
-                {currentRequest.workNotes && (
-                  <div className="text-xs text-slate-600 border-t border-emerald-100 pt-2">
-                    <span className="font-semibold text-slate-700">Tech notes: </span>
-                    <span className="break-words">{currentRequest.workNotes}</span>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs font-mono text-slate-600 pt-1">
-                  {currentRequest.laborHours !== undefined && (
-                    <span>
-                      Labor: {currentRequest.laborHours}h{' '}
-                      {techProfile?.hourlyRate
-                        ? `(${formatHourlyPrice(techProfile.hourlyRate, 2000)})`
-                        : ''}
-                    </span>
-                  )}
-                  {currentRequest.completedAt && (
-                    <span>
-                      Completed: {new Date(currentRequest.completedAt).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-
-                {/* Parts used */}
-                {currentRequest.partsUsed && currentRequest.partsUsed.length > 0 && (
-                  <div className="pt-2 border-t border-emerald-100 space-y-1.5">
-                    <div className="text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
-                      <div className="flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Parts & Materials Consumed</span>
-                      </div>
-                      <span className="text-[11px] font-mono text-emerald-800 font-semibold">
-                        Total:{' '}
-                        {formatPrice(
-                          currentRequest.partsUsed.reduce(
-                            (sum, p) => sum + p.quantity * p.unitPrice,
-                            0
-                          )
-                        )}
-                      </span>
-                    </div>
-                    <div className="divide-y divide-emerald-100 text-xs">
-                      {currentRequest.partsUsed.map((p) => (
-                        <div
-                          key={p.id}
-                          className="py-1 flex items-center justify-between text-slate-600"
-                        >
-                          <span className="truncate pr-2">
-                            {p.name} (x{p.quantity})
-                          </span>
-                          <span className="font-mono font-medium text-emerald-800 shrink-0">
-                            {formatPrice(p.quantity * p.unitPrice)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {currentRequest.rating && (
-                  <div className="pt-2 border-t border-emerald-100 flex items-center gap-2 text-xs">
-                    <span className="font-semibold text-slate-700">Customer Review:</span>
-                    <div className="flex items-center gap-0.5">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Star
-                          key={i}
-                          className={`w-3.5 h-3.5 ${
-                            i < currentRequest.rating!.score
-                              ? 'text-amber-500 fill-amber-500'
-                              : 'text-slate-300'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    {currentRequest.rating.comment && (
-                      <span className="text-slate-600 italic break-words">
-                        "{currentRequest.rating.comment}"
-                      </span>
-                    )}
-                  </div>
+          {/* Customer & Issue Details */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6] space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] flex items-center gap-1.5">
+                <UserIcon className="w-3.5 h-3.5" />
+                Customer & Location
+              </h4>
+              <p className="text-sm font-bold text-[#18181B]">{request.customerName}</p>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-[#5C5852]">
+                <span className="flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-gray-400" />
+                  {request.customerPhone}
+                </span>
+                {request.customerEmail && (
+                  <span className="flex items-center gap-1">
+                    <Mail className="w-3.5 h-3.5 text-gray-400" />
+                    {request.customerEmail}
+                  </span>
                 )}
               </div>
-            )}
 
-            {/* Audit Logs */}
-            <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5">
-                <History className="w-3.5 h-3.5 text-slate-400" />
-                <span>Ticket Lifecycle Audit Trail</span>
-              </h4>
-              <div className="space-y-1.5 text-xs">
-                {logs.length === 0 ? (
-                  <div className="text-slate-400 text-xs py-1">No logs recorded yet.</div>
-                ) : (
-                  logs.map((l) => (
-                    <div
-                      key={l.id}
-                      className="p-2 bg-slate-50 rounded flex items-center justify-between gap-2"
+              <div className="pt-2 border-t border-[#E6E1D6]">
+                <p className="text-xs font-semibold text-[#18181B] flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-[#143628]" />
+                  {request.serviceAddress.street}
+                  {request.serviceAddress.unit ? `, ${request.serviceAddress.unit}` : ''}
+                </p>
+                <p className="text-xs text-[#5C5852] pl-4">
+                  {request.serviceAddress.city}
+                  {request.serviceAddress.state ? `, ${request.serviceAddress.state}` : ''}
+                </p>
+                {hasCoords && (
+                  <div className="mt-2 pt-2 border-t border-[#E6E1D6] flex items-center justify-between text-xs">
+                    <span className="text-[#5C5852] font-mono">
+                      GPS: {request.serviceAddress.latitude}, {request.serviceAddress.longitude}
+                    </span>
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${request.serviceAddress.latitude}&mlon=${request.serviceAddress.longitude}#map=17/${request.serviceAddress.latitude}/${request.serviceAddress.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 font-bold text-[#143628] hover:underline"
                     >
-                      <div className="min-w-0 flex-1">
-                        <span className="font-medium text-slate-800 break-words">{l.note}</span>
-                        <span className="text-[11px] text-slate-400 ml-2 truncate">
-                          ({l.changedByName} · {l.changedByRole})
-                        </span>
-                      </div>
-                      <span className="text-[11px] font-mono text-slate-400 shrink-0">
-                        {new Date(l.timestamp).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-                  ))
+                      Open in Maps
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Footer */}
-            <div className="pt-3 sm:pt-4 border-t border-slate-200 flex items-center justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
-              >
-                Close
-              </button>
+            <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6] space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5" />
+                Issue & Field Report
+              </h4>
+              <p className="text-sm text-[#18181B] leading-relaxed">{request.description}</p>
+              <div className="pt-2 border-t border-[#E6E1D6] flex items-center justify-between text-xs">
+                <span className="text-[#5C5852]">Assigned Technician:</span>
+                <span className="font-bold text-[#18181B]">
+                  {request.assignedTechnicianName || 'Unassigned'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[#5C5852]">Hourly Rate:</span>
+                <span className="font-bold text-[#143628]">
+                  {formatHourlyRate(effectiveHourlyRate)}
+                </span>
+              </div>
+              {request.resolutionSummary && (
+                <div className="pt-2 border-t border-[#E6E1D6]">
+                  <span className="text-[11px] font-bold text-emerald-800 uppercase block">
+                    Resolution
+                  </span>
+                  <p className="text-xs text-[#18181B]">{request.resolutionSummary}</p>
+                </div>
+              )}
+              {request.rating && (
+                <div className="pt-2 border-t border-[#E6E1D6] flex items-center gap-1.5">
+                  <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                  <span className="text-xs font-bold">{request.rating.score}/5</span>
+                  {request.rating.comment && (
+                    <span className="text-xs text-[#5C5852] italic">
+                      "{request.rating.comment}"
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
+
+          {/* Appointment & Rescheduling Section */}
+          <RescheduleSection
+            request={request}
+            currentUser={currentUser}
+            onUpdated={onUpdated}
+          />
+
+          {/* Payment Summary & Manager Recording Section */}
+          <PaymentSummarySection
+            request={request}
+            currentUser={currentUser}
+            hourlyRate={effectiveHourlyRate}
+            onUpdated={onUpdated}
+          />
+
+          {/* Cancel Request */}
+          {request.status !== 'completed' && request.status !== 'cancelled' && (
+            <div className="pt-2 border-t border-[#E6E1D6]">
+              {!showCancelPrompt ? (
+                <button
+                  type="button"
+                  onClick={() => setShowCancelPrompt(true)}
+                  className="text-xs font-semibold text-red-600 hover:text-red-700 flex items-center gap-1.5"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  Cancel Request
+                </button>
+              ) : (
+                <form
+                  onSubmit={handleCancel}
+                  className="bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-2.5"
+                >
+                  <h5 className="text-xs font-bold text-red-900">Cancel Service Request</h5>
+                  <input
+                    type="text"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    placeholder="Reason for cancellation..."
+                    className="w-full px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
+                    >
+                      Confirm Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCancelPrompt(false)}
+                      className="px-3.5 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
+                    >
+                      Keep Active
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* Activity Log */}
+          {logs.length > 0 && (
+            <div className="pt-2 border-t border-[#E6E1D6]">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] mb-2 flex items-center gap-1.5">
+                <History className="w-3.5 h-3.5" />
+                Audit Trail ({logs.length})
+              </h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {logs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="text-xs bg-[#FAF8F5] p-2.5 rounded-lg border border-[#E6E1D6]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-[#18181B]">
+                        {log.changedByName} ({log.changedByRole})
+                      </span>
+                      <span className="text-[11px] text-[#5C5852]">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-[#5C5852] mt-0.5">{log.note}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
-

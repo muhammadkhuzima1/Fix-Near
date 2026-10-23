@@ -11,6 +11,9 @@ import {
   ServiceAddress,
   PartItem,
   ServiceRating,
+  RescheduleProposal,
+  PaymentRecord,
+  PaymentMethod,
 } from '../types';
 import {
   DEFAULT_CATEGORY_RATES,
@@ -772,6 +775,15 @@ class FixNearStore {
     );
     if (!approvedQueue.length) return [];
 
+    // Prioritize Urgent (emergency, high) ahead of Normal (medium, low)
+    const priorityRank: Record<PriorityLevel, number> = {
+      emergency: 4,
+      high: 3,
+      medium: 2,
+      low: 1,
+    };
+    approvedQueue.sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority]);
+
     const techProfiles = this.getTechnicianProfiles();
     const technicians = this.getUsers().filter((u) => u.role === 'technician');
     const availableProfiles = techProfiles.filter((p) => p.status === 'available');
@@ -811,14 +823,18 @@ class FixNearStore {
         );
         if (techActiveJobs.length >= 3) continue;
 
-        let score = 0;
+        let skillScore = 0;
         const spec = (prof.specialty || '').toLowerCase();
         const cat = req.category.toLowerCase();
 
-        if (spec === cat || spec.includes(cat) || cat.includes(spec)) score += 100;
-        else if ((prof.additionalSkills || []).some((s) => s.toLowerCase().includes(cat))) score += 65;
-        else if (spec.includes('general') || spec.includes('maintenance') || cat === 'general') score += 35;
-        else score += 15; // Cross-trade available technician fallback
+        if (spec === cat || spec.includes(cat) || cat.includes(spec)) skillScore += 100;
+        else if ((prof.additionalSkills || []).some((s) => s.toLowerCase().includes(cat))) skillScore += 65;
+        else if (spec.includes('general') || spec.includes('maintenance') || cat === 'general') skillScore += 35;
+
+        // Strictly require matching skill/qualification — never assign an unsuitable technician
+        if (skillScore <= 0) continue;
+
+        let score = skillScore;
 
         // Find conflict-free date and working-hours slot (9:00 AM – 6:00 PM)
         const now = new Date();
@@ -939,6 +955,419 @@ class FixNearStore {
     }
 
     return results;
+  }
+
+  /**
+   * RESCHEDULE WORKFLOW (Technician & Customer)
+   */
+  public requestReschedule(
+    requestId: string,
+    params: { proposedDate: string; proposedTimeSlot: string; reason: string },
+    actor: User
+  ): { success: boolean; request?: ServiceRequest; error?: string } {
+    if (!params.reason || !params.reason.trim()) {
+      return { success: false, error: 'Please provide a reason for rescheduling.' };
+    }
+    if (!params.proposedDate) {
+      return { success: false, error: 'Please select a proposed date.' };
+    }
+
+    const slotCheck = this.parseAndValidateSlot(params.proposedTimeSlot);
+    if (!slotCheck.valid) {
+      return {
+        success: false,
+        error:
+          slotCheck.error ||
+          'Proposed time must be within working hours (9:00 AM – 6:00 PM).',
+      };
+    }
+
+    const requests = this.getRequests();
+    const index = requests.findIndex((r) => r.id === requestId);
+    if (index === -1) return { success: false, error: 'Service request not found.' };
+
+    const req = requests[index];
+    if (req.status === 'completed' || req.status === 'cancelled') {
+      return {
+        success: false,
+        error: `Cannot reschedule a ${req.status} request.`,
+      };
+    }
+
+    if (actor.role === 'customer' && req.customerId !== actor.id) {
+      return { success: false, error: 'You can only reschedule your own service requests.' };
+    }
+    if (actor.role === 'technician' && req.assignedTechnicianId !== actor.id) {
+      return { success: false, error: 'You can only reschedule jobs assigned to you.' };
+    }
+
+    // Check technician conflict if a technician is assigned
+    if (req.assignedTechnicianId) {
+      const conflictJob = requests.find((r) => {
+        if (r.id === req.id) return false;
+        if (r.assignedTechnicianId !== req.assignedTechnicianId) return false;
+        if (!['assigned', 'accepted', 'in_progress'].includes(r.status)) return false;
+        if (r.preferredDate !== params.proposedDate) return false;
+        const win = this.parseAndValidateSlot(r.preferredTimeSlot);
+        return win.startHour < slotCheck.endHour && slotCheck.startHour < win.endHour;
+      });
+      if (conflictJob) {
+        return {
+          success: false,
+          error: `Schedule conflict: Assigned technician already has ticket ${conflictJob.ticketNumber} on ${params.proposedDate} (${conflictJob.preferredTimeSlot}).`,
+        };
+      }
+    }
+
+    const history = Array.isArray(req.rescheduleHistory) ? [...req.rescheduleHistory] : [];
+    if (req.rescheduleRequest && req.rescheduleRequest.status === 'pending') {
+      history.push({
+        ...req.rescheduleRequest,
+        status: 'declined',
+        respondedAt: new Date().toISOString(),
+        respondedById: actor.id,
+        respondedByName: actor.fullName,
+        respondedByRole: actor.role,
+        responseNote: 'Superseded by counter-proposal',
+      });
+    }
+
+    const proposal: RescheduleProposal = {
+      id: 'rsch_' + Date.now(),
+      requestedByRole: actor.role === 'technician' ? 'technician' : 'customer',
+      requestedById: actor.id,
+      requestedByName: actor.fullName,
+      originalDate: req.preferredDate,
+      originalTimeSlot: req.preferredTimeSlot,
+      proposedDate: params.proposedDate,
+      proposedTimeSlot: slotCheck.canonical,
+      reason: params.reason.trim(),
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+
+    req.rescheduleRequest = proposal;
+    req.rescheduleHistory = history;
+    req.updatedAt = new Date().toISOString();
+    this.save(STORAGE_KEYS.REQUESTS, requests);
+
+    this.addLog({
+      requestId: req.id,
+      fromStatus: req.status,
+      toStatus: req.status,
+      changedByUserId: actor.id,
+      changedByName: actor.fullName,
+      changedByRole: actor.role,
+      note: `Reschedule requested by ${actor.fullName} (${actor.role}): Proposed ${params.proposedDate} (${slotCheck.canonical}). Reason: ${params.reason.trim()}`,
+    });
+
+    // Notify appropriate parties
+    if (actor.role === 'technician') {
+      this.addNotification({
+        recipientUserId: req.customerId,
+        title: `Reschedule Requested: ${req.ticketNumber}`,
+        message: `Technician ${actor.fullName} proposed a new appointment time: ${params.proposedDate} (${slotCheck.canonical}). Reason: ${params.reason.trim()}`,
+        requestId: req.id,
+        type: 'alert',
+      });
+    } else if (req.assignedTechnicianId) {
+      this.addNotification({
+        recipientUserId: req.assignedTechnicianId,
+        title: `Customer Reschedule Request: ${req.ticketNumber}`,
+        message: `${actor.fullName} requested to reschedule ${req.ticketNumber} to ${params.proposedDate} (${slotCheck.canonical}). Reason: ${params.reason.trim()}`,
+        requestId: req.id,
+        type: 'alert',
+      });
+    }
+
+    const managers = this.getUsers().filter((u) => u.role === 'manager');
+    managers.forEach((m) => {
+      this.addNotification({
+        recipientUserId: m.id,
+        title: `Reschedule Pending: ${req.ticketNumber}`,
+        message: `${actor.fullName} (${actor.role}) requested to reschedule ${req.ticketNumber} to ${params.proposedDate} (${slotCheck.canonical}).`,
+        requestId: req.id,
+        type: 'alert',
+      });
+    });
+
+    return { success: true, request: req };
+  }
+
+  public respondToReschedule(
+    requestId: string,
+    decision: {
+      action: 'accept' | 'decline';
+      responseNote?: string;
+    },
+    actor: User
+  ): { success: boolean; request?: ServiceRequest; error?: string } {
+    const requests = this.getRequests();
+    const index = requests.findIndex((r) => r.id === requestId);
+    if (index === -1) return { success: false, error: 'Service request not found.' };
+
+    const req = requests[index];
+    const proposal = req.rescheduleRequest;
+    if (!proposal || proposal.status !== 'pending') {
+      return { success: false, error: 'No pending reschedule request found.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const history = Array.isArray(req.rescheduleHistory) ? [...req.rescheduleHistory] : [];
+
+    if (decision.action === 'accept') {
+      const slotCheck = this.parseAndValidateSlot(proposal.proposedTimeSlot);
+      if (!slotCheck.valid) {
+        return {
+          success: false,
+          error: slotCheck.error || 'Proposed slot is outside working hours (9:00 AM – 6:00 PM).',
+        };
+      }
+
+      if (req.assignedTechnicianId) {
+        const conflictJob = requests.find((r) => {
+          if (r.id === req.id) return false;
+          if (r.assignedTechnicianId !== req.assignedTechnicianId) return false;
+          if (!['assigned', 'accepted', 'in_progress'].includes(r.status)) return false;
+          if (r.preferredDate !== proposal.proposedDate) return false;
+          const win = this.parseAndValidateSlot(r.preferredTimeSlot);
+          return win.startHour < slotCheck.endHour && slotCheck.startHour < win.endHour;
+        });
+        if (conflictJob) {
+          return {
+            success: false,
+            error: `Schedule conflict: Technician is already booked for ${conflictJob.ticketNumber} on ${proposal.proposedDate} (${conflictJob.preferredTimeSlot}).`,
+          };
+        }
+      }
+
+      const resolvedProposal: RescheduleProposal = {
+        ...proposal,
+        status: 'accepted',
+        respondedAt: nowIso,
+        respondedById: actor.id,
+        respondedByName: actor.fullName,
+        respondedByRole: actor.role,
+        responseNote: decision.responseNote?.trim() || undefined,
+      };
+
+      req.preferredDate = proposal.proposedDate;
+      req.preferredTimeSlot = slotCheck.canonical;
+      req.rescheduleRequest = resolvedProposal;
+      history.push(resolvedProposal);
+      req.rescheduleHistory = history;
+      req.updatedAt = nowIso;
+      this.save(STORAGE_KEYS.REQUESTS, requests);
+
+      this.addLog({
+        requestId: req.id,
+        fromStatus: req.status,
+        toStatus: req.status,
+        changedByUserId: actor.id,
+        changedByName: actor.fullName,
+        changedByRole: actor.role,
+        note: `Reschedule accepted by ${actor.fullName} (${actor.role}). Appointment updated from ${proposal.originalDate} (${proposal.originalTimeSlot}) to ${proposal.proposedDate} (${slotCheck.canonical}).`,
+      });
+
+      this.addNotification({
+        recipientUserId: proposal.requestedById,
+        title: `Reschedule Accepted: ${req.ticketNumber}`,
+        message: `${actor.fullName} accepted the new appointment time: ${proposal.proposedDate} (${slotCheck.canonical}).`,
+        requestId: req.id,
+        type: 'status_change',
+      });
+
+      return { success: true, request: req };
+    } else {
+      const resolvedProposal: RescheduleProposal = {
+        ...proposal,
+        status: 'declined',
+        respondedAt: nowIso,
+        respondedById: actor.id,
+        respondedByName: actor.fullName,
+        respondedByRole: actor.role,
+        responseNote: decision.responseNote?.trim() || undefined,
+      };
+
+      req.rescheduleRequest = resolvedProposal;
+      history.push(resolvedProposal);
+      req.rescheduleHistory = history;
+      req.updatedAt = nowIso;
+      this.save(STORAGE_KEYS.REQUESTS, requests);
+
+      this.addLog({
+        requestId: req.id,
+        fromStatus: req.status,
+        toStatus: req.status,
+        changedByUserId: actor.id,
+        changedByName: actor.fullName,
+        changedByRole: actor.role,
+        note: `Reschedule declined by ${actor.fullName} (${actor.role}). Original appointment (${req.preferredDate} · ${req.preferredTimeSlot}) remains unchanged.`,
+      });
+
+      this.addNotification({
+        recipientUserId: proposal.requestedById,
+        title: `Reschedule Declined: ${req.ticketNumber}`,
+        message: `${actor.fullName} declined the proposed time (${proposal.proposedDate} · ${proposal.proposedTimeSlot}). Original schedule remains in effect.`,
+        requestId: req.id,
+        type: 'alert',
+      });
+
+      return { success: true, request: req };
+    }
+  }
+
+  /**
+   * PAYMENT SUMMARY & RECORDING
+   */
+  public computePaymentSummary(req: ServiceRequest, hourlyRateOverride?: number): PaymentRecord {
+    const categoryRates = this.getServiceCategoryRates();
+    const techProf = req.assignedTechnicianId
+      ? this.getTechnicianProfile(req.assignedTechnicianId)
+      : undefined;
+    const hourlyRate =
+      hourlyRateOverride ||
+      techProf?.hourlyRate ||
+      categoryRates[req.category] ||
+      DEFAULT_CATEGORY_RATES[req.category] ||
+      2000;
+
+    const laborHours = req.laborHours && req.laborHours > 0 ? req.laborHours : 1;
+    const partsTotal = (req.partsUsed || []).reduce(
+      (sum, part) => sum + (Number(part.quantity) || 0) * (Number(part.unitPrice) || 0),
+      0
+    );
+    const calculatedTotal = Math.round(laborHours * hourlyRate + partsTotal);
+
+    const existing = req.payment;
+    const totalAmount =
+      existing && existing.totalAmount > 0 && req.status !== 'completed'
+        ? existing.totalAmount
+        : calculatedTotal;
+    const amountPaid = existing ? Math.max(0, Math.round(Number(existing.amountPaid) || 0)) : 0;
+    const remainingBalance = Math.max(0, totalAmount - amountPaid);
+
+    let status: 'unpaid' | 'partially_paid' | 'paid' = 'unpaid';
+    if (amountPaid > 0 && remainingBalance === 0 && totalAmount > 0) {
+      status = 'paid';
+    } else if (amountPaid > 0 && remainingBalance > 0) {
+      status = 'partially_paid';
+    }
+
+    return {
+      totalAmount,
+      amountPaid,
+      remainingBalance,
+      status,
+      method: existing?.method,
+      transactionReference: existing?.transactionReference,
+      verifiedOnline: existing?.verifiedOnline,
+      updatedAt: existing?.updatedAt,
+      updatedById: existing?.updatedById,
+      updatedByName: existing?.updatedByName,
+      updatedByRole: existing?.updatedByRole,
+    };
+  }
+
+  public updatePaymentRecord(
+    requestId: string,
+    params: {
+      totalAmount?: number;
+      amountPaid: number;
+      method: PaymentMethod;
+      transactionReference?: string;
+      verifiedOnline?: boolean;
+    },
+    actor: User
+  ): { success: boolean; request?: ServiceRequest; error?: string } {
+    const requests = this.getRequests();
+    const index = requests.findIndex((r) => r.id === requestId);
+    if (index === -1) return { success: false, error: 'Service request not found.' };
+
+    const req = requests[index];
+    if (actor.role === 'customer') {
+      return {
+        success: false,
+        error: 'Payments must be verified and recorded by the assigned technician or operations manager.',
+      };
+    }
+    if (actor.role === 'technician' && req.assignedTechnicianId !== actor.id) {
+      return {
+        success: false,
+        error: 'Technicians can only record payment details for their own assigned jobs.',
+      };
+    }
+
+    const baseSummary = this.computePaymentSummary(req);
+    const totalAmount =
+      params.totalAmount !== undefined && Number(params.totalAmount) > 0
+        ? Math.round(Number(params.totalAmount))
+        : baseSummary.totalAmount;
+    const amountPaid = Math.round(Number(params.amountPaid) || 0);
+
+    if (amountPaid < 0 || amountPaid > totalAmount) {
+      return {
+        success: false,
+        error: `Amount paid must be between PKR 0 and PKR ${totalAmount.toLocaleString()}.`,
+      };
+    }
+
+    if (params.method === 'online' && amountPaid > 0) {
+      if (!params.verifiedOnline || !params.transactionReference?.trim()) {
+        return {
+          success: false,
+          error:
+            'Online payments cannot be marked as paid without a verified transaction reference and confirmation.',
+        };
+      }
+    }
+
+    const remainingBalance = Math.max(0, totalAmount - amountPaid);
+    let status: 'unpaid' | 'partially_paid' | 'paid' = 'unpaid';
+    if (amountPaid > 0 && remainingBalance === 0 && totalAmount > 0) {
+      status = 'paid';
+    } else if (amountPaid > 0 && remainingBalance > 0) {
+      status = 'partially_paid';
+    }
+
+    const nowIso = new Date().toISOString();
+    const paymentRecord: PaymentRecord = {
+      totalAmount,
+      amountPaid,
+      remainingBalance,
+      status,
+      method: amountPaid > 0 ? params.method : undefined,
+      transactionReference: params.transactionReference?.trim() || undefined,
+      verifiedOnline: params.method === 'online' ? Boolean(params.verifiedOnline) : undefined,
+      updatedAt: nowIso,
+      updatedById: actor.id,
+      updatedByName: actor.fullName,
+      updatedByRole: actor.role,
+    };
+
+    req.payment = paymentRecord;
+    req.updatedAt = nowIso;
+    this.save(STORAGE_KEYS.REQUESTS, requests);
+
+    this.addLog({
+      requestId: req.id,
+      fromStatus: req.status,
+      toStatus: req.status,
+      changedByUserId: actor.id,
+      changedByName: actor.fullName,
+      changedByRole: actor.role,
+      note: `Payment updated: Paid PKR ${amountPaid.toLocaleString()} of PKR ${totalAmount.toLocaleString()} (${status.replace('_', ' ').toUpperCase()}) via ${params.method.toUpperCase()}${params.transactionReference ? ` [Ref: ${params.transactionReference.trim()}]` : ''}.`,
+    });
+
+    this.addNotification({
+      recipientUserId: req.customerId,
+      title: `Payment Recorded: ${req.ticketNumber}`,
+      message: `Payment status updated to ${status.replace('_', ' ').toUpperCase()} (Paid: PKR ${amountPaid.toLocaleString()}, Balance: PKR ${remainingBalance.toLocaleString()}).`,
+      requestId: req.id,
+      type: 'status_change',
+    });
+
+    return { success: true, request: req };
   }
 
   /**

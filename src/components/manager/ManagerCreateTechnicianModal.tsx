@@ -158,7 +158,7 @@ export const ManagerCreateTechnicianModal: React.FC<ManagerCreateTechnicianModal
                   required
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Carlos Mendez"
+                  placeholder="Full name"
                   className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
                 />
               </div>
@@ -172,7 +172,7 @@ export const ManagerCreateTechnicianModal: React.FC<ManagerCreateTechnicianModal
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="carlos@fixnear.internal"
+                  placeholder="Email address"
                   className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
                 />
               </div>
@@ -188,7 +188,7 @@ export const ManagerCreateTechnicianModal: React.FC<ManagerCreateTechnicianModal
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="555-0199"
+                  placeholder="Phone number"
                   className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
                 />
               </div>

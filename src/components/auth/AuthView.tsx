@@ -311,7 +311,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         required
                         value={custFullName}
                         onChange={(e) => setCustFullName(e.target.value)}
-                        placeholder="e.g. Sarah Jenkins"
+                        placeholder="Full name"
                         className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
                       />
                     </div>
@@ -324,7 +324,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         required
                         value={custPhone}
                         onChange={(e) => setCustPhone(e.target.value)}
-                        placeholder="e.g. 0300-1234567"
+                        placeholder="Phone number"
                         className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0 font-mono"
                       />
                     </div>

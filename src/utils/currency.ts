@@ -11,6 +11,7 @@ export const CURRENCY_SYMBOL = 'Rs.';
 export const CURRENCY_HOURLY_LABEL = 'PKR/hour';
 
 export const WORKING_HOURS_TEXT = 'Working Hours: 9:00 AM – 6:00 PM';
+export const WORKING_HOURS_LABEL = WORKING_HOURS_TEXT;
 export const WORKING_HOURS_DISPLAY = WORKING_HOURS_TEXT;
 export const WORKING_HOURS_SHORT = '9:00 AM – 6:00 PM';
 export const WORKING_HOURS_START = 9; // 9:00 AM (09:00)

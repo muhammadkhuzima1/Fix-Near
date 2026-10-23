@@ -1,17 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { ServiceCategory, PriorityLevel, ServiceAddress, AIProblemAnalysis } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
-import { store } from '../../services/store';
 import { AIService } from '../../services/aiService';
-import { ServiceAddress, AIProblemAnalysis, ServiceCategory } from '../../types';
+import { TriggerService } from '../../services/triggerService';
+import { CategoryIcon } from '../common/CategoryIcon';
+import { PriorityBadge } from '../common/PriorityBadge';
 import {
-  WORKING_TIME_SLOTS,
-  WORKING_HOURS_DISPLAY,
   formatHourlyRate,
   DEFAULT_CATEGORY_RATES,
+  WORKING_TIME_SLOTS,
+  WORKING_HOURS_LABEL,
 } from '../../utils/currency';
-import { PriorityBadge } from '../common/PriorityBadge';
 import {
   X,
   Calendar,
@@ -19,423 +19,673 @@ import {
   MapPin,
   AlertCircle,
   Sparkles,
-  Wrench,
-  CheckCircle2,
-  Upload,
-  Image as ImageIcon,
   Loader2,
-  HelpCircle,
-  ShieldAlert,
+  CheckCircle2,
+  Navigation,
+  ExternalLink,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface CreateRequestModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
+  customerId?: string;
+  customerPhone?: string;
   onClose: () => void;
-  onSuccess: (requestId: string) => void;
+  onCreated?: () => void;
+  onSuccess?: (reqId: string) => void;
 }
 
-const TIME_SLOTS = WORKING_TIME_SLOTS;
-
-const SUGGESTED_PROBLEMS = [
-  'Water heater is leaking from the bottom valve and water is pooling on the basement floor.',
-  'Kitchen outlets are sparking and tripping the breaker whenever the microwave turns on.',
-  'AC unit stopped cooling completely and is blowing room-temperature air during 85°F weather.',
-  'Refrigerator freezer is warm, ice maker stopped, and food is starting to thaw.',
-  'Heavy oak front door is sticking against the frame and will not latch securely.',
+const CATEGORIES: { value: ServiceCategory; label: string }[] = [
+  { value: 'plumbing', label: 'Plumbing' },
+  { value: 'electrical', label: 'Electrical' },
+  { value: 'hvac', label: 'HVAC' },
+  { value: 'appliance', label: 'Appliance' },
+  { value: 'carpentry', label: 'Carpentry' },
+  { value: 'general', label: 'General' },
 ];
 
 export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
-  isOpen,
+  isOpen = true,
+  customerId: propCustomerId,
+  customerPhone: propCustomerPhone,
   onClose,
+  onCreated,
   onSuccess,
 }) => {
   const { currentUser } = useAuth();
-  const { showToast } = useToast();
+  const customerId = propCustomerId || currentUser?.id || '';
+  const customerPhone = propCustomerPhone ?? currentUser?.phone ?? '';
 
-  // Natural language problem description
-  const [problemDescription, setProblemDescription] = useState('');
-  const [analyzing, setAnalyzing] = useState(false);
-  const [aiAnalysis, setAiAnalysis] = useState<AIProblemAnalysis | null>(null);
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState<ServiceCategory>('plumbing');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState<PriorityLevel>('medium');
 
-  // Preferred schedule
-  const [preferredDate, setPreferredDate] = useState(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0];
-  });
-  const [preferredTimeSlot, setPreferredTimeSlot] = useState<string>(TIME_SLOTS[0]);
-
-  // Service address
   const [street, setStreet] = useState('');
   const [unit, setUnit] = useState('');
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [zip, setZip] = useState('');
-  const [contactPhone, setContactPhone] = useState(currentUser?.phone || '');
+  const [contactPhone, setContactPhone] = useState(customerPhone || '');
 
-  // Photo attachments (simulated data URLs)
-  const [attachmentPreviews, setAttachmentPreviews] = useState<string[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [categoryRates, setCategoryRates] = useState<Record<ServiceCategory, number>>(() =>
-    store.getServiceCategoryRates()
-  );
+  // GPS Coordinates (populated strictly when customer clicks "Use My Current Location" and grants permission)
+  const [coords, setCoords] = useState<{
+    latitude: number;
+    longitude: number;
+    accuracyMeters?: number;
+    formattedAddress?: string;
+  } | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationMessage, setLocationMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const tomorrow = new Date(Date.now() + 86400000 - new Date().getTimezoneOffset() * 60000)
+    .toISOString()
+    .split('T')[0];
+  const minDateStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+    .toISOString()
+    .split('T')[0];
+
+  const [preferredDate, setPreferredDate] = useState(tomorrow);
+  const [preferredTimeSlot, setPreferredTimeSlot] = useState<string>(WORKING_TIME_SLOTS[0]);
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Live service category rates from Supabase
+  const [categoryRates, setCategoryRates] =
+    useState<Record<ServiceCategory, number>>(DEFAULT_CATEGORY_RATES);
 
   useEffect(() => {
-    if (isOpen) {
-      SupabaseService.fetchServiceCategoryRates()
-        .then((rates) => setCategoryRates(rates))
-        .catch(() => {});
-    }
-  }, [isOpen]);
+    let mounted = true;
+    SupabaseService.fetchServiceCategoryRates().then((rates) => {
+      if (mounted && rates) {
+        setCategoryRates(rates);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  // Debounced AI analysis as user types their problem description
-  useEffect(() => {
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
+  // AI Smart Triage State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState<AIProblemAnalysis | null>(null);
 
-    const trimmed = problemDescription.trim();
-    if (trimmed.length < 15) {
-      setAiAnalysis(null);
-      setAnalyzing(false);
+  const handleAIAnalyze = async () => {
+    if (!description.trim() && !title.trim()) {
+      setError('Enter a problem description first to run AI analysis.');
       return;
     }
 
-    setAnalyzing(true);
-    debounceTimerRef.current = setTimeout(async () => {
-      try {
-        const analysis = await AIService.analyzeProblem(trimmed);
-        setAiAnalysis(analysis);
-      } catch (err) {
-        console.error('Error during auto-analysis:', err);
-      } finally {
-        setAnalyzing(false);
+    setError('');
+    setIsAnalyzing(true);
+    try {
+      const analysis = await AIService.analyzeProblem(description || title);
+      setAiResult(analysis);
+      setCategory(analysis.category);
+      setPriority(analysis.priority);
+      if (!title.trim() || title.trim().length < 5) {
+        setTitle(analysis.title);
       }
-    }, 700);
+    } catch {
+      setError('AI analysis failed. You can select the category and priority manually.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, [problemDescription]);
+  // Request browser location permission ONLY when customer clicks "Use My Current Location"
+  const handleUseCurrentLocation = () => {
+    setLocationMessage(null);
 
-  if (!isOpen) return null;
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      setCoords(null);
+      setLocationMessage({
+        type: 'error',
+        text: 'Geolocation is not supported by your browser. Please enter your address manually.',
+      });
+      return;
+    }
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = Number(position.coords.latitude.toFixed(6));
+        const lng = Number(position.coords.longitude.toFixed(6));
+        const acc = position.coords.accuracy ? Math.round(position.coords.accuracy) : undefined;
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setAttachmentPreviews((prev) => [...prev, event.target!.result as string]);
+        let formatted = '';
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`,
+            {
+              headers: {
+                Accept: 'application/json',
+              },
+            }
+          );
+          if (response.ok) {
+            const data = await response.json();
+            const addr = data?.address || {};
+            const road =
+              addr.road ||
+              addr.pedestrian ||
+              addr.suburb ||
+              addr.neighbourhood ||
+              addr.residential ||
+              '';
+            const houseNumber = addr.house_number ? `${addr.house_number} ` : '';
+            const detectedStreet = `${houseNumber}${road}`.trim();
+            const detectedCity =
+              addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
+            const detectedState = addr.state || addr.region || '';
+            const detectedZip = addr.postcode || '';
+
+            if (detectedStreet && !street.trim()) setStreet(detectedStreet);
+            if (detectedCity && !city.trim()) setCity(detectedCity);
+            if (detectedState && !state.trim()) setState(detectedState);
+            if (detectedZip && !zip.trim()) setZip(detectedZip);
+            if (data?.display_name) {
+              formatted = String(data.display_name);
+              if (!street.trim() && !detectedStreet) {
+                setStreet(formatted.split(',').slice(0, 2).join(',').trim());
+              }
+            }
+          }
+        } catch {
+          // Reverse geocoding is optional; coordinates are still saved
         }
-      };
-      reader.readAsDataURL(file);
-    });
+
+        setCoords({
+          latitude: lat,
+          longitude: lng,
+          accuracyMeters: acc,
+          formattedAddress: formatted || undefined,
+        });
+        setIsLocating(false);
+        setLocationMessage({
+          type: 'success',
+          text: `GPS coordinates captured (${lat}, ${lng}). Verify or complete the address fields below.`,
+        });
+      },
+      (geoError) => {
+        setCoords(null);
+        setIsLocating(false);
+        let msg = 'Unable to get your current location. Please enter your address manually.';
+        if (geoError.code === geoError.PERMISSION_DENIED) {
+          msg = 'Location permission was denied. Please enter your address manually below.';
+        } else if (geoError.code === geoError.POSITION_UNAVAILABLE) {
+          msg = 'Location information is unavailable on this device. Please enter your address manually.';
+        } else if (geoError.code === geoError.TIMEOUT) {
+          msg = 'Location request timed out. Please try again or enter your address manually.';
+        }
+        setLocationMessage({
+          type: 'error',
+          text: msg,
+        });
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
   };
 
-  const removeAttachment = (index: number) => {
-    setAttachmentPreviews((prev) => prev.filter((_, idx) => idx !== index));
-  };
-
-  const handleSelectSuggestion = (suggestion: string) => {
-    setProblemDescription(suggestion);
-  };
+  const isUrgent = priority === 'emergency' || priority === 'high';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFormError(null);
+    setError('');
 
-    if (!currentUser) {
-      setFormError('Authentication required to submit a request.');
+    if (!description.trim() && !title.trim()) {
+      setError('Please describe the repair issue.');
+      return;
+    }
+    if (!street.trim() || !city.trim()) {
+      setError('Street address and city are required.');
+      return;
+    }
+    if (!preferredDate) {
+      setError('Please select a preferred appointment date.');
       return;
     }
 
-    const trimmedProblem = problemDescription.trim();
-    if (trimmedProblem.length < 10) {
-      setFormError('Please provide a descriptive explanation of your problem.');
+    const slotValidation = SupabaseService.validateWorkingHoursSlot(preferredTimeSlot);
+    if (!slotValidation.valid) {
+      setError(
+        slotValidation.error ||
+          `Appointments must be scheduled during ${WORKING_HOURS_LABEL}.`
+      );
       return;
     }
 
-    if (!street.trim() || !city.trim() || !state.trim() || !zip.trim()) {
-      setFormError('Please complete all required service address fields.');
-      return;
-    }
-
-    setSubmitting(true);
+    setIsSubmitting(true);
 
     try {
-      // 1. Ensure latest AI analysis is available
-      let analysis = aiAnalysis;
-      if (!analysis) {
-        analysis = await AIService.analyzeProblem(trimmedProblem);
-        setAiAnalysis(analysis);
+      let finalCategory = category;
+      let finalPriority = priority;
+      let finalTitle = title.trim();
+      let requiredSkill: string | undefined = aiResult?.requiredSkill;
+      let technicianSummary: string | undefined = aiResult?.technicianSummary;
+
+      if (!aiResult) {
+        try {
+          const autoAnalysis = await AIService.analyzeProblem(description || title);
+          finalCategory = autoAnalysis.category;
+          // Preserve customer's explicit Urgent selection or apply AI detected urgency
+          if (priority === 'high' || priority === 'emergency') {
+            finalPriority =
+              autoAnalysis.priority === 'emergency' ? 'emergency' : priority;
+          } else {
+            finalPriority = autoAnalysis.priority;
+          }
+          if (!finalTitle) {
+            finalTitle = autoAnalysis.title;
+          }
+          requiredSkill = autoAnalysis.requiredSkill;
+          technicianSummary = autoAnalysis.technicianSummary;
+        } catch {
+          if (!finalTitle) finalTitle = `${category.toUpperCase()} Service Request`;
+        }
+      } else if (!finalTitle) {
+        finalTitle = aiResult.title;
       }
 
-      const address: ServiceAddress = {
+      const serviceAddress: ServiceAddress = {
         street: street.trim(),
         unit: unit.trim() || undefined,
         city: city.trim(),
-        state: state.trim(),
-        zip: zip.trim(),
-        contactPhone: contactPhone.trim() || currentUser.phone,
+        state: state.trim() || 'PK',
+        zip: zip.trim() || '00000',
+        contactPhone: contactPhone.trim() || customerPhone,
+        latitude: coords?.latitude,
+        longitude: coords?.longitude,
+        accuracyMeters: coords?.accuracyMeters,
+        formattedAddress: coords?.formattedAddress,
       };
 
-      // 2. Submit to Supabase with AI-determined category, priority, skill, and technician summary
-      // SupabaseService will automatically evaluate real Supabase technician availability and auto-assign!
       const res = await SupabaseService.createServiceRequest({
-        customerId: currentUser.id,
-        title: analysis.title,
-        category: analysis.category,
-        description: trimmedProblem,
-        priority: analysis.priority,
-        serviceAddress: address,
+        customerId,
+        title: finalTitle,
+        category: finalCategory,
+        description: description.trim() || finalTitle,
+        priority: finalPriority,
+        serviceAddress,
         preferredDate,
-        preferredTimeSlot,
-        requiredSkill: analysis.requiredSkill,
-        technicianSummary: analysis.technicianSummary,
-        attachments: attachmentPreviews,
+        preferredTimeSlot: slotValidation.canonical,
+        requiredSkill,
+        technicianSummary,
       });
 
       if (!res.success || !res.request) {
-        throw new Error(res.error || 'Failed to submit service request');
+        setError(res.error || 'Failed to submit service request.');
+        setIsSubmitting(false);
+        return;
       }
 
-      if (res.autoDispatchedTo) {
-        showToast(
-          `Ticket ${res.request.ticketNumber} created! AI auto-dispatched to technician ${res.autoDispatchedTo}.`,
-          'success'
-        );
-      } else {
-        showToast(
-          `Ticket ${res.request.ticketNumber} submitted! Pending Operations Manager approval for AI technician dispatch.`,
-          'success'
-        );
-      }
+      const customerProfile = await SupabaseService.getProfile(customerId);
+      TriggerService.triggerServiceRequestCreated(
+        res.request,
+        customerProfile
+          ? {
+              id: customerProfile.id,
+              fullName: customerProfile.fullName,
+              email: customerProfile.email,
+              phone: customerProfile.phone,
+            }
+          : {
+              id: customerId,
+              fullName: res.request.customerName,
+              email: res.request.customerEmail || '',
+              phone: contactPhone.trim() || customerPhone,
+            },
+        {
+          aiSummary: technicianSummary || aiResult?.reasoning || null,
+          requiredSkill: requiredSkill || null,
+          autoDispatchedTo: null,
+        }
+      );
 
-      onSuccess(res.request.id);
+      if (onCreated) onCreated();
+      if (onSuccess) onSuccess(res.request.id);
       onClose();
     } catch (err: any) {
-      setFormError(err.message || 'Failed to submit service request.');
+      setError(err.message || 'Error creating service request.');
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-      />
-
-      <div className="min-h-screen px-2 sm:px-4 text-center flex items-center justify-center py-4">
-        <div className="relative bg-white text-left rounded-2xl shadow-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-7 z-10 box-border">
-          {/* Header */}
-          <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-slate-200">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-semibold bg-[#EAE4D9] text-[#143628] border border-[#D8CFBE]">
-                  <Sparkles className="w-3 h-3 text-[#143628]" />
-                  <span>AI-Powered Dispatch</span>
-                </span>
-                <span className="text-xs text-[#69776E]">· Real-Time Match</span>
-              </div>
-              <h2 className="font-serif text-lg sm:text-2xl font-bold text-[#143628] mt-1 truncate">
-                Request Service
-              </h2>
-              <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
-                Explain your problem in natural language. AI will identify the required skills and automatically dispatch an available technician.
-              </p>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-[#69776E] hover:text-[#143628] rounded-lg hover:bg-[#EAE4D9] transition-colors shrink-0 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl border border-[#E6E1D6] shadow-2xl max-w-xl w-full overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="px-6 py-4 bg-[#143628] text-white flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight">New Service Request</h2>
+            <p className="text-xs text-[#E6E1D6]/80 mt-0.5">{WORKING_HOURS_LABEL}</p>
           </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-          {formError && (
-            <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{formError}</span>
+        <form
+          onSubmit={handleSubmit}
+          className="p-5 sm:p-6 space-y-5 max-h-[82vh] overflow-y-auto"
+        >
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="mt-4 sm:mt-5 space-y-4 sm:space-y-6">
-            {/* 1. AI-Powered Problem Description */}
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700">
-                  Problem Description (Natural Language)
-                </label>
-                {analyzing ? (
-                  <span className="text-[11px] font-medium text-indigo-600 flex items-center gap-1">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    AI Analyzing...
-                  </span>
-                ) : aiAnalysis ? (
-                  <span className="text-[11px] font-medium text-emerald-600 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" />
-                    AI Classified
-                  </span>
-                ) : null}
-              </div>
+          {/* 1. Problem Description & AI Analysis */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold uppercase tracking-wider text-[#18181B]">
+                1. Describe the Issue *
+              </label>
+              <button
+                type="button"
+                onClick={handleAIAnalyze}
+                disabled={isAnalyzing || (!description.trim() && !title.trim())}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#143628] hover:bg-[#0f291e] disabled:opacity-40 text-white text-xs font-semibold transition-all"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    Auto-Detect Category & Urgency
+                  </>
+                )}
+              </button>
+            </div>
 
-              <div className="relative">
-                <textarea
+            <textarea
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe what needs repair (mention if there is an urgent leak, spark, or outage)..."
+              className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+              required
+            />
+
+            {aiResult && (
+              <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span className="font-semibold text-[#143628]">
+                    AI Classification: {aiResult.requiredSkill}
+                  </span>
+                </div>
+                <PriorityBadge priority={priority} size="sm" />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-[#5C5852] mb-1">
+                Short Summary Title *
+              </label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Brief title of the issue"
+                className="w-full px-3.5 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                required
+              />
+            </div>
+          </div>
+
+          {/* 2. Category & Priority */}
+          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold uppercase tracking-wider text-[#18181B]">
+                2. Category & Priority
+              </label>
+              <span className="text-xs font-bold text-[#143628]">
+                Rate: {formatHourlyRate(categoryRates[category])}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              {CATEGORIES.map((cat) => {
+                const selected = category === cat.value;
+                return (
+                  <button
+                    key={cat.value}
+                    type="button"
+                    onClick={() => setCategory(cat.value)}
+                    className={`flex flex-col items-center p-2.5 rounded-xl border text-center transition-all ${
+                      selected
+                        ? 'border-[#143628] bg-[#143628]/5 text-[#143628] ring-2 ring-[#143628]/20'
+                        : 'border-[#E6E1D6] hover:border-gray-300 text-[#5C5852]'
+                    }`}
+                  >
+                    <CategoryIcon
+                      category={cat.value}
+                      className={`w-4 h-4 mb-1 ${selected ? 'text-[#143628]' : 'text-[#5C5852]'}`}
+                    />
+                    <span className="text-[11px] font-bold">{cat.label}</span>
+                    <span className="text-[10px] text-[#5C5852]">
+                      PKR {(categoryRates[cat.value] || 2000).toLocaleString()}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Priority Selector (Normal vs Urgent) */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E1D6]">
+              <div>
+                <span className="text-xs font-bold text-[#18181B] block">Request Priority</span>
+                <span className="text-[11px] text-[#5C5852]">
+                  Urgent requests are prioritized in the dispatch queue for available specialists.
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setPriority('medium')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                    !isUrgent
+                      ? 'bg-[#143628] text-white border-[#143628]'
+                      : 'bg-white text-[#5C5852] border-[#E6E1D6]'
+                  }`}
+                >
+                  Normal
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPriority(priority === 'emergency' ? 'emergency' : 'high')
+                  }
+                  className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                    isUrgent
+                      ? 'bg-red-600 text-white border-red-600'
+                      : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
+                  }`}
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Urgent
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Customer Location Selection */}
+          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-[#18181B] flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-[#143628]" />
+                3. Service Location *
+              </label>
+              <button
+                type="button"
+                onClick={handleUseCurrentLocation}
+                disabled={isLocating}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-[#143628] text-[#143628] hover:text-white border border-[#143628]/30 transition-colors disabled:opacity-50"
+              >
+                {isLocating ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Getting GPS...
+                  </>
+                ) : (
+                  <>
+                    <Navigation className="w-3.5 h-3.5" />
+                    Use My Current Location
+                  </>
+                )}
+              </button>
+            </div>
+
+            {locationMessage && (
+              <div
+                className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                  locationMessage.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-amber-50 border-amber-200 text-amber-800'
+                }`}
+              >
+                <span>{locationMessage.text}</span>
+                {coords && (
+                  <a
+                    href={`https://www.openstreetmap.org/?mlat=${coords.latitude}&mlon=${coords.longitude}#map=17/${coords.latitude}/${coords.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-bold text-[#143628] underline shrink-0"
+                  >
+                    Map Pin
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Street Address *
+                </label>
+                <input
+                  type="text"
+                  value={street}
+                  onChange={(e) => setStreet(e.target.value)}
+                  placeholder="Enter street address or area"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
                   required
-                  rows={4}
-                  value={problemDescription}
-                  onChange={(e) => setProblemDescription(e.target.value)}
-                  placeholder="Tell us what is broken, what symptoms you see, strange noises, when it started, or if there is active water or electrical danger..."
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-slate-900 leading-relaxed min-w-0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Unit / Floor
+                </label>
+                <input
+                  type="text"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  placeholder="Optional"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  City *
+                </label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="City"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Province / State
+                </label>
+                <input
+                  type="text"
+                  value={state}
+                  onChange={(e) => setState(e.target.value)}
+                  placeholder="Province / State"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Contact Phone *
+                </label>
+                <input
+                  type="tel"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  placeholder="Phone number"
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 4. Preferred Schedule */}
+          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase tracking-wider text-[#18181B] flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-[#143628]" />
+                4. Preferred Schedule *
+              </label>
+              <span className="text-[11px] font-semibold text-[#143628]">
+                {WORKING_HOURS_LABEL}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Date *
+                </label>
+                <input
+                  type="date"
+                  min={minDateStr}
+                  value={preferredDate}
+                  onChange={(e) => setPreferredDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                  required
                 />
               </div>
 
-              {/* Quick Suggestion Chips */}
               <div>
-                <div className="text-[11px] text-slate-400 font-medium mb-1.5 flex items-center gap-1">
-                  <span>Try an example prompt:</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {SUGGESTED_PROBLEMS.map((suggestion, idx) => (
-                    <button
-                      type="button"
-                      key={idx}
-                      onClick={() => handleSelectSuggestion(suggestion)}
-                      className="text-[11px] text-left px-2.5 py-1 bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 hover:border-indigo-300 rounded-lg text-slate-600 transition-colors cursor-pointer truncate max-w-full"
-                    >
-                      {suggestion.length > 55 ? `${suggestion.slice(0, 55)}...` : suggestion}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* AI Diagnostics Card */}
-              {aiAnalysis && (
-                <div className="p-3.5 sm:p-4 bg-linear-to-br from-indigo-50/90 to-sky-50/60 border border-indigo-200 rounded-xl space-y-2.5 transition-all">
-                  <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
-                    <div className="flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-indigo-600" />
-                      <span className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
-                        AI Operational Diagnosis
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-indigo-600 font-mono">
-                      {aiAnalysis.source === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash' : 'NLP Intelligence'}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                    <div className="p-2 bg-white/80 rounded-lg border border-indigo-100/80">
-                      <div className="text-[10px] uppercase font-semibold text-slate-400">
-                        Identified Category
-                      </div>
-                      <div className="font-bold text-slate-900 capitalize mt-0.5 flex items-center gap-1">
-                        <Wrench className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>{aiAnalysis.category}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-2 bg-white/80 rounded-lg border border-indigo-100/80">
-                      <div className="text-[10px] uppercase font-semibold text-slate-400">
-                        Standard Rate
-                      </div>
-                      <div className="font-bold text-[#143628] font-mono mt-0.5">
-                        {formatHourlyRate(
-                          categoryRates[aiAnalysis.category] ||
-                            DEFAULT_CATEGORY_RATES[aiAnalysis.category] ||
-                            2000
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="p-2 bg-white/80 rounded-lg border border-indigo-100/80">
-                      <div className="text-[10px] uppercase font-semibold text-slate-400">
-                        Assessed Urgency
-                      </div>
-                      <div className="mt-0.5">
-                        <PriorityBadge priority={aiAnalysis.priority} />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-2.5 bg-white/90 rounded-lg border border-indigo-100/80 space-y-1">
-                    <div className="text-[10px] uppercase font-semibold text-slate-400">
-                      Required Technician Skill
-                    </div>
-                    <div className="text-xs font-semibold text-slate-800">
-                      {aiAnalysis.requiredSkill}
-                    </div>
-                    <p className="text-[11px] text-slate-500 leading-normal">
-                      {aiAnalysis.reasoning}
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 bg-white/90 rounded-lg border border-indigo-100/80 space-y-0.5">
-                    <div className="text-[10px] uppercase font-semibold text-indigo-600">
-                      Technician Briefing Summary
-                    </div>
-                    <p className="text-xs text-slate-700 italic">
-                      "{aiAnalysis.technicianSummary}"
-                    </p>
-                  </div>
-
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5 pt-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>
-                      Upon submission, system will check real Supabase technician availability and auto-assign immediately.
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 2. Preferred Schedule */}
-            <div className="space-y-2.5 sm:space-y-3 pt-1">
-              <div className="flex items-center justify-between flex-wrap gap-1">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Preferred Schedule
+                <label className="block text-xs font-medium text-[#5C5852] mb-1">
+                  Time Window *
                 </label>
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#143628] bg-[#FAF8F5] px-2.5 py-0.5 rounded border border-[#E8E2D8]">
-                  <Clock className="w-3 h-3" />
-                  <span>{WORKING_HOURS_DISPLAY}</span>
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Preferred Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={preferredDate}
-                    onChange={(e) => setPreferredDate(e.target.value)}
-                    min={new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Appointment Window (9:00 AM – 6:00 PM)
-                  </label>
+                <div className="relative">
+                  <Clock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <select
                     value={preferredTimeSlot}
                     onChange={(e) => setPreferredTimeSlot(e.target.value)}
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
+                    className="w-full pl-9 pr-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
                   >
-                    {TIME_SLOTS.map((slot) => (
+                    {WORKING_TIME_SLOTS.map((slot) => (
                       <option key={slot} value={slot}>
                         {slot}
                       </option>
@@ -444,158 +694,26 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* 3. Service Address */}
-            <div className="space-y-2.5 sm:space-y-3 pt-1">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Service Location
-              </label>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <div className="sm:col-span-2">
-                  <input
-                    type="text"
-                    required
-                    value={street}
-                    onChange={(e) => setStreet(e.target.value)}
-                    placeholder="Street Address (e.g., 742 Evergreen Terrace)"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-                <div>
-                  <input
-                    type="text"
-                    value={unit}
-                    onChange={(e) => setUnit(e.target.value)}
-                    placeholder="Unit / Apt # (optional)"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                <div>
-                  <input
-                    type="text"
-                    required
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    placeholder="City"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-                <div>
-                  <input
-                    type="text"
-                    required
-                    value={state}
-                    onChange={(e) => setState(e.target.value)}
-                    placeholder="State"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <input
-                    type="text"
-                    required
-                    value={zip}
-                    onChange={(e) => setZip(e.target.value)}
-                    placeholder="ZIP Code"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Contact Phone for Technician
-                </label>
-                <input
-                  type="tel"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="On-site contact number"
-                  className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900 min-w-0"
-                />
-              </div>
-            </div>
-
-            {/* 4. Photo Attachments */}
-            <div className="space-y-2 pt-1">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Photo Evidence (Optional)
-              </label>
-              <div className="flex items-center gap-3 flex-wrap">
-                <label className="cursor-pointer px-3 py-2 bg-slate-50 border border-slate-300 hover:bg-slate-100 rounded-lg text-xs font-medium text-slate-700 flex items-center gap-1.5 transition-colors">
-                  <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Attach Photo</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileUpload}
-                  />
-                </label>
-                <span className="text-[11px] text-slate-400">
-                  Upload photos of leaks, error codes, damage, or labels.
-                </span>
-              </div>
-
-              {attachmentPreviews.length > 0 && (
-                <div className="flex flex-wrap gap-2 pt-2">
-                  {attachmentPreviews.map((preview, idx) => (
-                    <div
-                      key={idx}
-                      className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 group"
-                    >
-                      <img
-                        src={preview}
-                        alt={`Attachment ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeAttachment(idx)}
-                        className="absolute inset-0 bg-slate-900/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Footer Buttons */}
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-200">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#FDFBF7] bg-[#143628] hover:bg-[#1B4332] rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Matching & Dispatching...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Submit & Auto-Dispatch</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-        </div>
+          {/* Actions */}
+          <div className="pt-3 border-t border-[#E6E1D6] flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl border border-[#E6E1D6] text-xs font-semibold text-[#5C5852] hover:bg-[#FAF8F5]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold shadow-sm"
+            >
+              {isSubmitting ? 'Submitting...' : 'Submit Request'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

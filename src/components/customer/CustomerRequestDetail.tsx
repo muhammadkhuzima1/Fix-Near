@@ -1,507 +1,510 @@
 import React, { useState, useEffect } from 'react';
-import { ServiceRequest, ServiceRequestLog, TechnicianProfile } from '../../types';
+import { ServiceRequest, User, ServiceRequestLog, ServiceCategory } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { useToast } from '../../context/ToastContext';
 import { SupabaseService } from '../../services/supabaseService';
-import { store } from '../../services/store';
-import { formatPrice, formatHourlyPrice } from '../../utils/currency';
-import { WorkflowStepper } from '../common/WorkflowStepper';
 import { StatusBadge } from '../common/StatusBadge';
 import { PriorityBadge } from '../common/PriorityBadge';
+import { CategoryIcon } from '../common/CategoryIcon';
+import { RescheduleSection } from '../common/RescheduleSection';
+import { PaymentSummarySection } from '../common/PaymentSummarySection';
+import {
+  formatPrice,
+  formatHourlyRate,
+  DEFAULT_CATEGORY_RATES,
+} from '../../utils/currency';
 import {
   X,
   MapPin,
-  Calendar,
-  Clock,
   Phone,
-  User,
-  Star,
-  AlertTriangle,
-  History,
+  User as UserIcon,
+  Wrench,
   CheckCircle2,
-  Package,
+  XCircle,
+  Star,
+  History,
+  FileText,
+  ExternalLink,
 } from 'lucide-react';
 
 interface CustomerRequestDetailProps {
   request: ServiceRequest;
+  currentUser?: User;
   onClose: () => void;
-  onRefresh: () => void;
+  onUpdated?: () => void;
+  onRefresh?: () => void;
 }
+
+const STEPS = [
+  { key: 'pending', label: 'Submitted' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'assigned', label: 'Assigned' },
+  { key: 'accepted', label: 'Accepted' },
+  { key: 'in_progress', label: 'In Progress' },
+  { key: 'completed', label: 'Completed' },
+];
 
 export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
   request,
+  currentUser: propUser,
   onClose,
+  onUpdated,
   onRefresh,
 }) => {
-  const { currentUser } = useAuth();
-  const { showToast } = useToast();
-
-  const [isCancelling, setIsCancelling] = useState(false);
+  const { currentUser: authUser } = useAuth();
+  const currentUser =
+    propUser ||
+    authUser || {
+      id: request.customerId,
+      fullName: request.customerName,
+      email: request.customerEmail || '',
+      phone: request.customerPhone || '',
+      role: 'customer',
+      createdAt: request.createdAt,
+    };
+  const triggerRefresh = () => {
+    if (onUpdated) onUpdated();
+    if (onRefresh) onRefresh();
+  };
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
-  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Rating state
-  const [ratingScore, setRatingScore] = useState(5);
-  const [ratingComment, setRatingComment] = useState('');
-  const [ratingLoading, setRatingLoading] = useState(false);
+  const [ratingScore, setRatingScore] = useState(request.rating?.score || 5);
+  const [ratingComment, setRatingComment] = useState(request.rating?.comment || '');
+  const [ratingSuccess, setRatingSuccess] = useState(false);
+  const [ratingError, setRatingError] = useState('');
+
   const [logs, setLogs] = useState<ServiceRequestLog[]>([]);
-  const [techProfile, setTechProfile] = useState<TechnicianProfile | null>(null);
+  const [categoryRates, setCategoryRates] =
+    useState<Record<ServiceCategory, number>>(DEFAULT_CATEGORY_RATES);
+  const [assignedTechRate, setAssignedTechRate] = useState<number | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-    const fetchLogs = async () => {
-      const data = await SupabaseService.fetchLogs(request.id);
-      if (isMounted) setLogs(data);
-    };
-    fetchLogs();
-
+    let mounted = true;
+    SupabaseService.fetchLogs(request.id).then((res) => {
+      if (mounted) setLogs(res);
+    });
+    SupabaseService.fetchServiceCategoryRates().then((rates) => {
+      if (mounted && rates) setCategoryRates(rates);
+    });
     if (request.assignedTechnicianId) {
       SupabaseService.getTechnicianProfile(request.assignedTechnicianId).then((prof) => {
-        if (isMounted) setTechProfile(prof);
+        if (mounted && prof?.hourlyRate) {
+          setAssignedTechRate(prof.hourlyRate);
+        }
       });
     } else {
-      setTechProfile(null);
+      setAssignedTechRate(null);
     }
-
     return () => {
-      isMounted = false;
+      mounted = false;
     };
-  }, [request.id, request.assignedTechnicianId]);
+  }, [request]);
+
+  const effectiveHourlyRate =
+    assignedTechRate ||
+    categoryRates[request.category] ||
+    DEFAULT_CATEGORY_RATES[request.category] ||
+    2000;
+
+  const getStepIndex = (status: string) => {
+    if (status === 'cancelled') return -1;
+    return STEPS.findIndex((s) => s.key === status);
+  };
+
+  const currentStepIdx = getStepIndex(request.status);
 
   const handleCancel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
     if (!cancelReason.trim()) {
-      showToast('Please state a reason for cancelling.', 'error');
+      setCancelError('Please provide a reason for cancelling.');
       return;
     }
+    setIsSubmitting(true);
+    const res = await SupabaseService.cancelServiceRequest(
+      request.id,
+      cancelReason.trim(),
+      currentUser
+    );
+    setIsSubmitting(false);
 
-    setCancelLoading(true);
-    const res = await SupabaseService.cancelServiceRequest(request.id, cancelReason, currentUser);
-    if (res.success) {
-      showToast('Service request was cancelled.', 'info');
-      setIsCancelling(false);
-      onRefresh();
-    } else {
-      showToast(res.error || 'Failed to cancel request.', 'error');
+    if (!res.success) {
+      setCancelError(res.error || 'Could not cancel request.');
+      return;
     }
-    setCancelLoading(false);
+    triggerRefresh();
+    onClose();
   };
 
   const handleRate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
-
-    setRatingLoading(true);
+    setRatingError('');
+    setIsSubmitting(true);
     const res = await SupabaseService.rateServiceRequest(
       request.id,
       { score: ratingScore, comment: ratingComment },
       currentUser
     );
+    setIsSubmitting(false);
+
     if (res.success) {
-      showToast('Thank you for rating your service experience!', 'success');
-      onRefresh();
+      setRatingSuccess(true);
+      triggerRefresh();
     } else {
-      showToast(res.error || 'Failed to submit review.', 'error');
+      setRatingError(res.error || 'Failed to save feedback.');
     }
-    setRatingLoading(false);
   };
 
-  const canCancel = request.status === 'pending';
+  const hasCoords =
+    typeof request.serviceAddress.latitude === 'number' &&
+    typeof request.serviceAddress.longitude === 'number';
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-      />
-
-      <div className="min-h-screen px-2 sm:px-4 text-center flex items-center justify-center py-4">
-        <div className="relative bg-white text-left rounded-2xl shadow-xl border border-[#E8E2D8] max-w-3xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-7 z-10 box-border font-sans">
-          {/* Header */}
-          <div className="flex items-start justify-between pb-3 sm:pb-4 border-b border-[#F0EBE3] gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
-                <span className="text-xs font-mono font-semibold text-[#143628]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl border border-[#E6E1D6] shadow-2xl max-w-3xl w-full overflow-hidden my-8">
+        {/* Header */}
+        <div className="px-6 py-4 bg-[#FAF8F5] border-b border-[#E6E1D6] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#143628]/10 text-[#143628] flex items-center justify-center">
+              <CategoryIcon category={request.category} className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-[#143628] bg-[#143628]/10 px-2 py-0.5 rounded">
                   {request.ticketNumber}
                 </span>
-                <span className="text-[#C2DDD0]">·</span>
-                <StatusBadge status={request.status} />
-                <PriorityBadge priority={request.priority} />
+                <StatusBadge status={request.status} size="sm" />
+                <PriorityBadge priority={request.priority} size="sm" />
               </div>
-              <h2 className="font-serif text-lg sm:text-2xl font-bold text-[#143628] truncate">
-                {request.title}
-              </h2>
+              <h2 className="text-base font-bold text-[#18181B] mt-1">{request.title}</h2>
             </div>
-            <button
-              onClick={onClose}
-              className="p-1.5 text-[#69776E] hover:text-[#143628] rounded-lg hover:bg-[#FAF8F5] transition-colors shrink-0 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
           </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-          <div className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
-            {/* 1. Complete Workflow Progress Stepper */}
-            <div className="p-3.5 sm:p-5 bg-slate-50 border border-slate-200 rounded-xl overflow-hidden">
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3 sm:mb-4">
-                Status Progression
+        <div className="p-5 sm:p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+          {/* Status Progress */}
+          {request.status !== 'cancelled' ? (
+            <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="grid grid-cols-6 gap-1.5">
+                {STEPS.map((step, idx) => {
+                  const isDone = idx <= currentStepIdx;
+                  const isCurrent = idx === currentStepIdx;
+                  return (
+                    <div key={step.key} className="flex flex-col items-center text-center">
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold mb-1 ${
+                          isDone
+                            ? 'bg-[#143628] text-white'
+                            : 'bg-white border border-gray-300 text-gray-400'
+                        } ${isCurrent ? 'ring-2 ring-[#143628]/25' : ''}`}
+                      >
+                        {isDone ? <CheckCircle2 className="w-3.5 h-3.5" /> : idx + 1}
+                      </div>
+                      <span
+                        className={`text-[10px] font-semibold ${
+                          isDone ? 'text-[#18181B]' : 'text-gray-400'
+                        }`}
+                      >
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-              <WorkflowStepper
-                status={request.status}
-                cancellationReason={request.cancellationReason}
-                cancelledAt={request.cancelledAt}
-              />
             </div>
-
-            {/* 2. Cancellation Dialog if user clicked Cancel */}
-            {isCancelling && (
-              <div className="p-3.5 sm:p-4 bg-rose-50 border border-rose-200 rounded-xl">
-                <h3 className="text-sm font-semibold text-rose-900 mb-1">
-                  Cancel Service Request
-                </h3>
-                <p className="text-xs text-rose-700 mb-3 leading-relaxed">
-                  Are you sure? Since your request is still in Pending status, you may cancel it now.
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex items-start gap-2.5">
+              <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-xs font-bold text-red-900">Request Cancelled</h4>
+                <p className="text-xs text-red-700 mt-0.5">
+                  Reason: {request.cancellationReason || 'Cancelled'}
                 </p>
-                <form onSubmit={handleCancel} className="space-y-3">
-                  <input
-                    type="text"
-                    required
-                    value={cancelReason}
-                    onChange={(e) => setCancelReason(e.target.value)}
-                    placeholder="Provide a brief reason (e.g. Issue resolved on my own)"
-                    className="w-full px-3 py-2 text-xs bg-white border border-rose-300 rounded-lg text-slate-900 focus:outline-none min-w-0"
-                  />
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIsCancelling(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-white rounded-md cursor-pointer"
-                    >
-                      Keep Request
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={cancelLoading}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md cursor-pointer"
-                    >
-                      {cancelLoading ? 'Cancelling...' : 'Confirm Cancellation'}
-                    </button>
-                  </div>
-                </form>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* 3. Problem Description & Details Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-              {/* Description */}
-              <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl space-y-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Issue Description
+          {/* Description, Location & Assigned Technician */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6]">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] mb-1.5 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" />
+                  Issue Details
                 </h4>
-                <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">
-                  {request.description}
-                </p>
-                <div className="pt-2 flex items-center justify-between flex-wrap gap-2 text-xs">
-                  <div className="text-slate-500 font-mono">
-                    AI Category: <span className="capitalize font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">{request.category}</span>
-                  </div>
-                  {request.assignedTechnicianName ? (
-                    <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      Auto-Assigned: {request.assignedTechnicianName}
-                    </span>
-                  ) : (
-                    <span className="text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                      AI Dispatch Queue: Awaiting matching tech
-                    </span>
-                  )}
+                <p className="text-sm text-[#18181B] leading-relaxed">{request.description}</p>
+                <div className="mt-2 pt-2 border-t border-[#E6E1D6] text-xs font-semibold text-[#143628]">
+                  Service Rate: {formatHourlyRate(effectiveHourlyRate)}
                 </div>
+              </div>
 
-                {request.attachments && request.attachments.length > 0 && (
-                  <div className="pt-2">
-                    <div className="text-xs font-medium text-slate-500 mb-1.5">
-                      Attachments ({request.attachments.length})
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {request.attachments.map((img, idx) => (
-                        <a
-                          key={idx}
-                          href={img}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="w-12 h-12 sm:w-14 sm:h-14 rounded-md border border-slate-200 overflow-hidden block"
-                        >
-                          <img
-                            src={img}
-                            alt="Attachment preview"
-                            className="w-full h-full object-cover"
-                          />
-                        </a>
-                      ))}
-                    </div>
+              <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6]">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] mb-1.5 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-[#143628]" />
+                  Service Location
+                </h4>
+                <p className="text-sm font-medium text-[#18181B]">
+                  {request.serviceAddress.street}
+                  {request.serviceAddress.unit ? `, ${request.serviceAddress.unit}` : ''}
+                </p>
+                <p className="text-xs text-[#5C5852]">
+                  {request.serviceAddress.city}
+                  {request.serviceAddress.state ? `, ${request.serviceAddress.state}` : ''}
+                </p>
+                {hasCoords && (
+                  <div className="mt-2 pt-2 border-t border-[#E6E1D6] flex items-center justify-between text-xs">
+                    <span className="text-[#5C5852] font-mono">
+                      GPS: {request.serviceAddress.latitude}, {request.serviceAddress.longitude}
+                    </span>
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${request.serviceAddress.latitude}&mlon=${request.serviceAddress.longitude}#map=17/${request.serviceAddress.latitude}/${request.serviceAddress.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 font-bold text-[#143628] hover:underline"
+                    >
+                      Open in Maps
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
                   </div>
                 )}
               </div>
-
-              {/* Service Schedule & Location */}
-              <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl space-y-2.5">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Location & Schedule
-                </h4>
-                <div className="flex items-start gap-2 text-xs sm:text-sm text-slate-700">
-                  <MapPin className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                  <div className="min-w-0">
-                    <div className="break-words">
-                      {request.serviceAddress.street}
-                      {request.serviceAddress.unit ? `, ${request.serviceAddress.unit}` : ''}
-                    </div>
-                    <div className="text-slate-500 text-xs">
-                      {request.serviceAddress.city}, {request.serviceAddress.state}{' '}
-                      {request.serviceAddress.zip}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs text-slate-700 pt-1 border-t border-slate-100">
-                  <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span>Scheduled: {request.preferredDate}</span>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs text-slate-700">
-                  <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span className="truncate">{request.preferredTimeSlot}</span>
-                </div>
-              </div>
             </div>
 
-            {/* 4. Assigned Technician Card (if assigned) */}
-            {request.assignedTechnicianName && (
-              <div className="p-3.5 sm:p-4 bg-indigo-50/50 border border-indigo-200/80 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-semibold text-xs sm:text-sm shrink-0">
-                    {request.assignedTechnicianName.charAt(0)}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs text-indigo-600 font-medium">Assigned Technician</div>
-                    <div className="text-sm font-semibold text-slate-900 truncate">
-                      {request.assignedTechnicianName}
+            <div className="space-y-3">
+              {/* Assigned Technician */}
+              <div className="bg-[#FAF8F5] rounded-xl p-4 border border-[#E6E1D6] h-full">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] mb-2 flex items-center gap-1.5">
+                  <Wrench className="w-3.5 h-3.5" />
+                  Assigned Technician
+                </h4>
+                {request.assignedTechnicianName ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-full bg-[#143628] text-white flex items-center justify-center font-bold text-sm">
+                        {request.assignedTechnicianName.charAt(0)}
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-[#18181B]">
+                          {request.assignedTechnicianName}
+                        </p>
+                        <p className="text-xs text-[#5C5852]">Certified Field Specialist</p>
+                      </div>
                     </div>
                     {request.assignedTechnicianPhone && (
-                      <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 font-mono">
-                        <Phone className="w-3 h-3 text-slate-400" />
+                      <div className="flex items-center gap-2 text-xs text-[#5C5852] pt-1">
+                        <Phone className="w-3.5 h-3.5 text-gray-400" />
                         <span>{request.assignedTechnicianPhone}</span>
                       </div>
                     )}
-                    <div className="text-xs font-mono text-emerald-700 font-semibold mt-1">
-                      Billing Rate: {formatHourlyPrice(techProfile?.hourlyRate, 2000)}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-left sm:text-right text-xs text-slate-500 font-mono">
-                  {request.status === 'in_progress' ? (
-                    <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      Active on site
-                    </span>
-                  ) : request.status === 'accepted' ? (
-                    <span className="text-violet-700 font-medium">Confirmed for appointment</span>
-                  ) : (
-                    <span className="text-indigo-600">Dispatched</span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* 5. Completion Summary (if completed) */}
-            {request.status === 'completed' && (
-              <div className="p-3.5 sm:p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-2.5">
-                <div className="flex items-center gap-2 text-emerald-900 font-semibold text-sm">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Job Resolution Summary</span>
-                </div>
-                <p className="text-xs sm:text-sm text-slate-800 leading-relaxed break-words">
-                  {request.resolutionSummary || 'Service was completed by the technician.'}
-                </p>
-                {request.workNotes && (
-                  <div className="text-xs text-slate-600 border-t border-emerald-100 pt-2">
-                    <span className="font-semibold text-slate-700">Technician notes: </span>
-                    <span className="break-words">{request.workNotes}</span>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs font-mono text-slate-600 pt-1">
-                  {request.laborHours !== undefined && (
-                    <span>
-                      Labor: {request.laborHours}h {techProfile?.hourlyRate ? `(${formatHourlyPrice(techProfile.hourlyRate, 2000)})` : ''}
-                    </span>
-                  )}
-                  {request.completedAt && (
-                    <span>
-                      Completed: {new Date(request.completedAt).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-
-                {/* Parts used */}
-                {request.partsUsed && request.partsUsed.length > 0 && (
-                  <div className="pt-2 border-t border-emerald-100 space-y-1.5">
-                    <div className="text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
-                      <div className="flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Parts Installed</span>
-                      </div>
-                      <span className="text-[11px] font-mono text-emerald-800 font-semibold">
-                        Total: {formatPrice(request.partsUsed.reduce((sum, p) => sum + p.quantity * p.unitPrice, 0))}
-                      </span>
-                    </div>
-                    <div className="divide-y divide-emerald-100 text-xs">
-                      {request.partsUsed.map((p) => (
-                        <div key={p.id} className="py-1 flex items-center justify-between text-slate-600">
-                          <span className="truncate pr-2">
-                            {p.name} (x{p.quantity})
-                          </span>
-                          <span className="font-mono font-medium text-emerald-800 shrink-0">
-                            {formatPrice(p.quantity * p.unitPrice)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 6. Customer Rating Section */}
-            {request.status === 'completed' && (
-              <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl">
-                {request.rating ? (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
-                      Your Service Review
-                    </h4>
-                    <div className="flex items-center gap-1.5 mb-1">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Star
-                          key={i}
-                          className={`w-4 h-4 ${
-                            i < request.rating!.score
-                              ? 'text-amber-400 fill-amber-400'
-                              : 'text-slate-200'
-                          }`}
-                        />
-                      ))}
-                      <span className="text-xs font-semibold text-slate-800 ml-1">
-                        {request.rating.score} / 5
-                      </span>
-                    </div>
-                    {request.rating.comment && (
-                      <p className="text-xs text-slate-600 mt-1 italic break-words">
-                        "{request.rating.comment}"
-                      </p>
-                    )}
                   </div>
                 ) : (
-                  <form onSubmit={handleRate} className="space-y-3">
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                      Rate Your Service Experience
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <button
-                            type="button"
-                            key={star}
-                            onClick={() => setRatingScore(star)}
-                            className="p-1 hover:scale-110 transition-transform cursor-pointer"
-                          >
-                            <Star
-                              className={`w-5 h-5 ${
-                                star <= ratingScore
-                                  ? 'text-amber-400 fill-amber-400'
-                                  : 'text-slate-300'
-                              }`}
-                            />
-                          </button>
+                  <div className="flex items-center gap-2 text-xs text-[#5C5852] py-2">
+                    <UserIcon className="w-4 h-4 text-gray-400" />
+                    <span>
+                      {request.status === 'pending'
+                        ? 'Awaiting Manager approval.'
+                        : 'Approved — awaiting technician dispatch.'}
+                    </span>
+                  </div>
+                )}
+
+                {request.resolutionSummary && (
+                  <div className="mt-3 pt-3 border-t border-[#E6E1D6]">
+                    <span className="text-[11px] font-bold uppercase text-emerald-800 block mb-1">
+                      Resolution Summary
+                    </span>
+                    <p className="text-xs text-[#18181B]">{request.resolutionSummary}</p>
+                    {request.partsUsed && request.partsUsed.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {request.partsUsed.map((part, i) => (
+                          <div key={i} className="flex justify-between text-xs text-[#5C5852]">
+                            <span>
+                              {part.name} (x{part.quantity})
+                            </span>
+                            <span className="font-semibold">
+                              {formatPrice((part.unitCost ?? part.unitPrice ?? 0) * part.quantity)}
+                            </span>
+                          </div>
                         ))}
                       </div>
-                      <span className="text-xs font-semibold text-slate-700">
-                        {ratingScore} Stars
-                      </span>
-                    </div>
-                    <input
-                      type="text"
-                      value={ratingComment}
-                      onChange={(e) => setRatingComment(e.target.value)}
-                      placeholder="Optional feedback (e.g., Punctual, very thorough repair!)"
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none min-w-0"
-                    />
-                    <button
-                      type="submit"
-                      disabled={ratingLoading}
-                      className="px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 cursor-pointer"
-                    >
-                      {ratingLoading ? 'Submitting...' : 'Submit Rating'}
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-
-            {/* 7. Audit History Logs */}
-            <div className="p-3.5 sm:p-4 bg-white border border-slate-200 rounded-xl">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2.5 flex items-center gap-1.5">
-                <History className="w-3.5 h-3.5 text-slate-400" />
-                <span>Service Activity History</span>
-              </h4>
-              <div className="space-y-1.5 text-xs">
-                {logs.length === 0 ? (
-                  <div className="text-slate-400 text-xs py-1">No logs recorded yet.</div>
-                ) : (
-                  logs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="flex items-start justify-between gap-2 p-2 rounded-lg bg-slate-50/70 border border-slate-100 min-w-0"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-slate-800 break-words">{log.note}</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5 truncate">
-                          By {log.changedByName} ({log.changedByRole})
-                        </div>
-                      </div>
-                      <div className="text-[11px] font-mono text-slate-400 shrink-0">
-                        {new Date(log.timestamp).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </div>
-                    </div>
-                  ))
+                    )}
+                  </div>
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Footer actions */}
-            <div className="pt-3 sm:pt-4 border-t border-slate-200 flex items-center justify-between">
-              {canCancel && !isCancelling ? (
+          {/* Appointment & Rescheduling Section */}
+          <RescheduleSection
+            request={request}
+            currentUser={currentUser}
+            onUpdated={onUpdated}
+          />
+
+          {/* Payment Summary Section */}
+          <PaymentSummarySection
+            request={request}
+            currentUser={currentUser}
+            hourlyRate={effectiveHourlyRate}
+            onUpdated={onUpdated}
+          />
+
+          {/* Rating Section for Completed Requests */}
+          {request.status === 'completed' && (
+            <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900 mb-2 flex items-center gap-1.5">
+                <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                Service Feedback
+              </h4>
+
+              {request.rating || ratingSuccess ? (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        className={`w-4 h-4 ${
+                          star <= (request.rating?.score || ratingScore)
+                            ? 'text-amber-500 fill-amber-500'
+                            : 'text-gray-300'
+                        }`}
+                      />
+                    ))}
+                    <span className="ml-1.5 text-xs font-bold text-gray-800">
+                      {request.rating?.score || ratingScore} / 5
+                    </span>
+                  </div>
+                  {(request.rating?.comment || ratingComment) && (
+                    <p className="text-xs text-gray-700 italic">
+                      "{request.rating?.comment || ratingComment}"
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <form onSubmit={handleRate} className="space-y-2.5">
+                  {ratingError && (
+                    <div className="p-2 rounded bg-red-50 border border-red-200 text-xs text-red-700">
+                      {ratingError}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        onClick={() => setRatingScore(star)}
+                        className="p-1"
+                      >
+                        <Star
+                          className={`w-5 h-5 ${
+                            star <= ratingScore
+                              ? 'text-amber-500 fill-amber-500'
+                              : 'text-gray-300'
+                          }`}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    value={ratingComment}
+                    onChange={(e) => setRatingComment(e.target.value)}
+                    placeholder="Share brief feedback on the technician's work..."
+                    className="w-full px-3 py-1.5 bg-white border border-amber-200 rounded-lg text-xs"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg"
+                  >
+                    Submit Rating
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* Cancel Option (Only when Pending) */}
+          {request.status === 'pending' && (
+            <div className="pt-2 border-t border-[#E6E1D6]">
+              {!showCancelPrompt ? (
                 <button
                   type="button"
-                  onClick={() => setIsCancelling(true)}
-                  className="px-3 py-1.5 text-xs font-medium text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                  onClick={() => setShowCancelPrompt(true)}
+                  className="text-xs font-semibold text-red-600 hover:text-red-700 flex items-center gap-1.5"
                 >
+                  <XCircle className="w-3.5 h-3.5" />
                   Cancel Request
                 </button>
               ) : (
-                <div />
+                <form
+                  onSubmit={handleCancel}
+                  className="bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-2.5"
+                >
+                  <h5 className="text-xs font-bold text-red-900">Cancel Service Request</h5>
+                  {cancelError && <p className="text-xs text-red-600">{cancelError}</p>}
+                  <input
+                    type="text"
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    placeholder="Reason for cancellation..."
+                    className="w-full px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
+                    >
+                      Confirm Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCancelPrompt(false)}
+                      className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
+                    >
+                      Keep Request
+                    </button>
+                  </div>
+                </form>
               )}
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                Close
-              </button>
             </div>
-          </div>
+          )}
+
+          {/* Activity History */}
+          {logs.length > 0 && (
+            <div className="pt-2 border-t border-[#E6E1D6]">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] mb-2 flex items-center gap-1.5">
+                <History className="w-3.5 h-3.5" />
+                Activity Log
+              </h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {logs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="text-xs bg-[#FAF8F5] p-2.5 rounded-lg border border-[#E6E1D6]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-[#18181B]">
+                        {log.changedByName} ({log.changedByRole})
+                      </span>
+                      <span className="text-[11px] text-[#5C5852]">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-[#5C5852] mt-0.5">{log.note}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

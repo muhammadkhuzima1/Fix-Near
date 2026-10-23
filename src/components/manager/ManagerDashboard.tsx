@@ -1,488 +1,811 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import {
+  User,
+  ServiceRequest,
+  TechnicianProfile,
+  ServiceCategory,
+} from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { ServiceRequest, User, TechnicianProfile } from '../../types';
-import { store } from '../../services/store';
-import {
-  formatHourlyPrice,
-  WORKING_HOURS_DISPLAY,
-} from '../../utils/currency';
+import { SupabaseService } from '../../services/supabaseService';
+import { TriggerService } from '../../services/triggerService';
 import { StatusBadge } from '../common/StatusBadge';
-import { PriorityBadge } from '../common/PriorityBadge';
+import { PriorityBadge, isUrgentPriority } from '../common/PriorityBadge';
+import { CategoryIcon } from '../common/CategoryIcon';
+import { ManagerRequestDetailModal } from './ManagerRequestDetailModal';
+import { ManagerRequestsList } from './ManagerRequestsList';
+import { ManagerTechniciansList } from './ManagerTechniciansList';
+import { ManagerAuditLogs } from './ManagerAuditLogs';
+import { ManagerAIInsights } from './ManagerAIInsights';
 import {
-  Wrench,
+  formatPrice,
+  formatHourlyRate,
+  DEFAULT_CATEGORY_RATES,
+  WORKING_HOURS_LABEL,
+} from '../../utils/currency';
+import {
+  ClipboardList,
   Clock,
+  Wrench,
   CheckCircle2,
+  AlertTriangle,
   Users,
-  ShieldCheck,
-  ArrowRight,
-  Plus,
-  Calendar,
-  MapPin,
-  TrendingUp,
   Sparkles,
-  UserCheck,
+  Loader2,
+  Calendar,
+  Edit3,
+  Save,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ManagerDashboardProps {
+  currentUser?: User;
   requests: ServiceRequest[];
-  technicians: User[];
-  customers: User[];
+  technicians?: User[];
+  customers?: User[];
   technicianProfiles?: TechnicianProfile[];
-  onSelectRequest: (request: ServiceRequest) => void;
-  onNavigateTab: (tab: string) => void;
-  onOpenCreateTech: () => void;
-  onQuickApprove?: (request: ServiceRequest) => void | Promise<void>;
-  onQuickAIDispatch?: (request: ServiceRequest) => void | Promise<void>;
+  activeTab?: string;
+  onRefresh?: () => void;
+  onSelectRequest?: (req: ServiceRequest) => void;
+  onNavigateTab?: (tab: string) => void;
+  onOpenCreateTech?: () => void;
+  onQuickApprove?: (req: ServiceRequest) => void;
+  onQuickAIDispatch?: (req: ServiceRequest) => void;
 }
 
+const SERVICE_CATEGORIES: { key: ServiceCategory; label: string }[] = [
+  { key: 'plumbing', label: 'Plumbing' },
+  { key: 'electrical', label: 'Electrical' },
+  { key: 'hvac', label: 'HVAC' },
+  { key: 'appliance', label: 'Appliance' },
+  { key: 'carpentry', label: 'Carpentry' },
+  { key: 'general', label: 'General' },
+];
+
 export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
+  currentUser: propUser,
   requests,
-  technicians,
-  customers,
-  technicianProfiles,
+  technicians: propTechnicians,
+  technicianProfiles: propTechProfiles,
+  activeTab = 'dashboard',
+  onRefresh,
   onSelectRequest,
-  onNavigateTab,
   onOpenCreateTech,
   onQuickApprove,
   onQuickAIDispatch,
 }) => {
-  const { currentUser, isSupabaseActive } = useAuth();
-  const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
+  const { currentUser: authUser } = useAuth();
+  const currentUser = propUser || authUser;
 
-  const handleRowApprove = async (req: ServiceRequest) => {
-    if (!onQuickApprove || busyIds[req.id]) return;
-    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
+  const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
+  const [technicians, setTechnicians] = useState<User[]>(propTechnicians || []);
+  const [techProfiles, setTechProfiles] = useState<TechnicianProfile[]>(propTechProfiles || []);
+  const [isAutoDispatching, setIsAutoDispatching] = useState(false);
+  const [singleDispatchingId, setSingleDispatchingId] = useState<string | null>(null);
+  const [autoDispatchBanner, setAutoDispatchBanner] = useState<{
+    type: 'success' | 'info';
+    text: string;
+  } | null>(null);
+
+  // Manager Fee Management State
+  const [categoryRates, setCategoryRates] =
+    useState<Record<ServiceCategory, number>>(DEFAULT_CATEGORY_RATES);
+  const [editingRates, setEditingRates] =
+    useState<Record<ServiceCategory, string>>({
+      plumbing: String(DEFAULT_CATEGORY_RATES.plumbing),
+      electrical: String(DEFAULT_CATEGORY_RATES.electrical),
+      hvac: String(DEFAULT_CATEGORY_RATES.hvac),
+      appliance: String(DEFAULT_CATEGORY_RATES.appliance),
+      carpentry: String(DEFAULT_CATEGORY_RATES.carpentry),
+      general: String(DEFAULT_CATEGORY_RATES.general),
+    });
+  const [showFeeEditor, setShowFeeEditor] = useState(false);
+  const [syncTechRatesOnSave, setSyncTechRatesOnSave] = useState(true);
+  const [isSavingRates, setIsSavingRates] = useState(false);
+  const [feeBanner, setFeeBanner] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadManagerData = async () => {
+      const [techs, profiles, fetchedRates] = await Promise.all([
+        SupabaseService.fetchTechnicians(),
+        SupabaseService.fetchTechnicianProfiles(),
+        SupabaseService.fetchServiceCategoryRates(),
+      ]);
+      if (isMounted) {
+        setTechnicians(techs);
+        setTechProfiles(profiles);
+        if (fetchedRates) {
+          setCategoryRates(fetchedRates);
+          setEditingRates({
+            plumbing: String(fetchedRates.plumbing),
+            electrical: String(fetchedRates.electrical),
+            hvac: String(fetchedRates.hvac),
+            appliance: String(fetchedRates.appliance),
+            carpentry: String(fetchedRates.carpentry),
+            general: String(fetchedRates.general),
+          });
+        }
+      }
+    };
+    loadManagerData();
+    return () => {
+      isMounted = false;
+    };
+  }, [requests, activeTab]);
+
+  const handleSaveServicePrices = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFeeBanner(null);
+
+    const parsedRates: Partial<Record<ServiceCategory, number>> = {};
+    for (const item of SERVICE_CATEGORIES) {
+      const val = Number(editingRates[item.key]);
+      if (!Number.isFinite(val) || val < 100 || val > 500000) {
+        setFeeBanner({
+          type: 'error',
+          text: `${item.label}: Enter a valid hourly rate between PKR 100 and PKR 500,000.`,
+        });
+        return;
+      }
+      parsedRates[item.key] = Math.round(val);
+    }
+
+    setIsSavingRates(true);
     try {
-      await onQuickApprove(req);
+      const res = await SupabaseService.updateServiceCategoryRates(
+        parsedRates,
+        currentUser || null,
+        syncTechRatesOnSave
+      );
+      if (!res.success || !res.rates) {
+        setFeeBanner({
+          type: 'error',
+          text: res.error || 'Failed to save service prices.',
+        });
+      } else {
+        setCategoryRates(res.rates);
+        setShowFeeEditor(false);
+        setFeeBanner({
+          type: 'success',
+          text: 'Service prices saved to Supabase.',
+        });
+        onRefresh?.();
+      }
     } finally {
-      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
+      setIsSavingRates(false);
     }
   };
 
-  const handleRowAIDispatch = async (req: ServiceRequest) => {
-    if (busyIds[req.id]) return;
-    if (!onQuickAIDispatch) {
-      onSelectRequest(req);
-      return;
-    }
-    setBusyIds((prev) => ({ ...prev, [req.id]: true }));
-    try {
-      await onQuickAIDispatch(req);
-    } finally {
-      setBusyIds((prev) => ({ ...prev, [req.id]: false }));
-    }
+  // Sort urgent requests ahead of normal requests in the queue
+  const priorityWeight: Record<string, number> = {
+    emergency: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
   };
 
-  const pendingCount = requests.filter((r) => r.status === 'pending').length;
-  const approvedCount = requests.filter((r) => r.status === 'approved').length;
-  const activeDispatches = requests.filter((r) =>
+  const pendingApprovalRequests = requests
+    .filter((r) => r.status === 'pending')
+    .sort((a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0));
+
+  const approvedUnassignedRequests = requests
+    .filter((r) => r.status === 'approved' && !r.assignedTechnicianId)
+    .sort((a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0));
+
+  const queueRequests = [...approvedUnassignedRequests, ...pendingApprovalRequests];
+
+  const activeJobs = requests.filter((r) =>
     ['assigned', 'accepted', 'in_progress'].includes(r.status)
   );
-  const activeCount = activeDispatches.length;
-  const completedCount = requests.filter((r) => r.status === 'completed').length;
-
-  // Technicians stats strictly filtered against active technician users
-  const validTechIds = new Set(technicians.map((t) => t.id));
-  const rawProfiles =
-    technicianProfiles && technicianProfiles.length > 0
-      ? technicianProfiles
-      : isSupabaseActive
-      ? []
-      : store.getTechnicianProfiles();
-  const techProfiles = rawProfiles.filter(
-    (p) => validTechIds.has(p.id) || validTechIds.has(p.userId)
+  const completedRequests = requests.filter((r) => r.status === 'completed');
+  const urgentActiveRequests = requests.filter(
+    (r) =>
+      isUrgentPriority(r.priority) &&
+      r.status !== 'completed' &&
+      r.status !== 'cancelled'
   );
-  const availableTechs = techProfiles.filter((p) => p.status === 'available').length;
-
-  const urgentQueue = requests.filter(
-    (r) => r.status === 'pending' || r.status === 'approved'
+  const pendingReschedules = requests.filter(
+    (r) => r.rescheduleRequest?.status === 'pending'
   );
+
+  const availableTechs = techProfiles.filter((t) => t.status === 'available').length;
+
+  const handleApproveAction = async (req: ServiceRequest, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (onQuickApprove) {
+      onQuickApprove(req);
+      return;
+    }
+    if (!currentUser) return;
+    setAutoDispatchBanner(null);
+    const res = await SupabaseService.approveServiceRequest(req.id, currentUser);
+    if (!res.success) {
+      setAutoDispatchBanner({
+        type: 'info',
+        text: res.error || `Could not approve ${req.ticketNumber}.`,
+      });
+      return;
+    }
+    setAutoDispatchBanner({
+      type: 'success',
+      text: `${req.ticketNumber} approved. Ready for AI Dispatch.`,
+    });
+    onRefresh?.();
+  };
+
+  const handleDispatchAction = async (req: ServiceRequest, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (onQuickAIDispatch) {
+      onQuickAIDispatch(req);
+      return;
+    }
+    if (!currentUser || singleDispatchingId || isAutoDispatching) return;
+
+    setSingleDispatchingId(req.id);
+    setAutoDispatchBanner(null);
+
+    try {
+      const res = await SupabaseService.aiDispatchServiceRequest(req.id, currentUser);
+      if (res.assigned) {
+        setAutoDispatchBanner({
+          type: 'success',
+          text: `Dispatched ${res.ticketNumber} to ${res.technicianName} (${res.matchedSkill}) for ${res.scheduledDate} · ${res.scheduledTimeSlot}.`,
+        });
+      } else {
+        setAutoDispatchBanner({
+          type: 'info',
+          text: res.error || res.reason || `Could not dispatch ${req.ticketNumber}.`,
+        });
+      }
+      onRefresh?.();
+    } catch (err: any) {
+      setAutoDispatchBanner({
+        type: 'info',
+        text: err.message || 'Error during AI Dispatch.',
+      });
+    } finally {
+      setSingleDispatchingId(null);
+    }
+  };
+
+  const handleRunAutoDispatch = async () => {
+    if (approvedUnassignedRequests.length === 0) {
+      setAutoDispatchBanner({
+        type: 'info',
+        text:
+          pendingApprovalRequests.length > 0
+            ? `Approve pending requests first (${pendingApprovalRequests.length} awaiting approval) before running AI Auto-Dispatch.`
+            : 'No approved unassigned requests in the queue.',
+      });
+      return;
+    }
+
+    setIsAutoDispatching(true);
+    setAutoDispatchBanner(null);
+    try {
+      const results = await SupabaseService.autoAssignPendingRequests(currentUser || undefined);
+      const assignedList = results.filter((r) => r.assigned);
+
+      for (const r of assignedList) {
+        const req = requests.find((item) => item.id === r.requestId);
+        const tech = technicians.find((t) => t.id === r.technicianId);
+        if (req && tech) {
+          TriggerService.triggerTechnicianAssigned(
+            req,
+            { id: tech.id, fullName: tech.fullName, email: tech.email, phone: tech.phone },
+            { fullName: req.customerName, email: req.customerEmail, phone: req.customerPhone }
+          );
+        }
+      }
+
+      if (assignedList.length > 0) {
+        const summary = assignedList
+          .map((a) => `${a.ticketNumber} → ${a.technicianName} (${a.scheduledDate} · ${a.scheduledTimeSlot})`)
+          .join('; ');
+        setAutoDispatchBanner({
+          type: 'success',
+          text: `AI Auto-Dispatch assigned ${assignedList.length} request(s): ${summary}`,
+        });
+      } else {
+        const firstReason = results[0]?.error || results[0]?.reason;
+        setAutoDispatchBanner({
+          type: 'info',
+          text:
+            firstReason ||
+            'No available technicians with matching skills and conflict-free working hours found.',
+        });
+      }
+      onRefresh?.();
+    } catch {
+      setAutoDispatchBanner({
+        type: 'info',
+        text: 'Could not complete batch AI auto-dispatch.',
+      });
+    } finally {
+      setIsAutoDispatching(false);
+    }
+  };
+
+  const handleRequestSelect = (req: ServiceRequest) => {
+    if (onSelectRequest) {
+      onSelectRequest(req);
+    } else {
+      setSelectedRequest(req);
+    }
+  };
+
+  const activeSelectedRequest = selectedRequest
+    ? requests.find((r) => r.id === selectedRequest.id) || null
+    : null;
 
   return (
-    <div className="space-y-6 w-full max-w-full font-sans">
-      {/* Top Banner */}
-      <div className="bg-[#143628] text-[#FDFBF7] rounded-2xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6 shadow-sm border border-[#1B4332]">
-        <div className="space-y-2 max-w-xl min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-mono text-[#A3C9B6] uppercase tracking-wider">
-              Central Operations Console
-            </span>
-            <span className="text-xs text-[#C8DCD1]">·</span>
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-[#FAF8F5] bg-[#1B4332] px-2.5 py-0.5 rounded border border-[#2D6A4F]">
-              <Clock className="w-3 h-3" />
-              <span>{WORKING_HOURS_DISPLAY}</span>
-            </span>
-          </div>
-          <h2 className="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-[#FAF8F5] truncate">
-            Welcome, {currentUser?.fullName}
-          </h2>
-          <p className="text-xs sm:text-sm text-[#C8DCD1] leading-relaxed">
-            Review incoming customer requests, authorize dispatches during working hours (9:00 AM – 6:00 PM), manage technician fees, and track end-to-end resolution.
+    <div className="space-y-6">
+      {/* Header Banner */}
+      <div className="bg-[#143628] rounded-2xl p-6 text-white shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div>
+          <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+            Operations Manager · {WORKING_HOURS_LABEL}
+          </span>
+          <h1 className="text-2xl font-bold mt-1">Dispatch & Operations Control</h1>
+          <p className="text-xs text-[#E6E1D6]/85 mt-1">
+            Approve requests, run AI Dispatch (urgent requests prioritized first), manage fees, and track payments.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap shrink-0">
-          <button
-            onClick={() => onNavigateTab('technicians')}
-            className="px-3.5 py-2.5 bg-[#0E251B]/60 hover:bg-[#183D2D] text-[#C2DDD0] hover:text-white border border-[#1B4332] font-medium text-xs sm:text-sm rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <Wrench className="w-4 h-4 text-[#52B788]" />
-            <span>Fees & Techs</span>
-          </button>
-          <button
-            onClick={() => onNavigateTab('users')}
-            className="px-3.5 py-2.5 bg-[#0E251B]/60 hover:bg-[#183D2D] text-[#C2DDD0] hover:text-white border border-[#1B4332] font-medium text-xs sm:text-sm rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <ShieldCheck className="w-4 h-4 text-[#52B788]" />
-            <span>Users & Roles</span>
-          </button>
-          <button
-            onClick={onOpenCreateTech}
-            className="px-4 py-2.5 bg-[#FAF8F5] hover:bg-white text-[#143628] font-semibold text-xs sm:text-sm rounded-xl transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Add Technician</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Primary Analytics Grid */}
-      <div className="grid grid-cols-2 min-[640px]:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-        <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
-          <div className="text-xs text-amber-800 font-medium flex items-center justify-between">
-            <span className="truncate">Pending Review</span>
-            <Clock className="w-4 h-4 text-amber-600 shrink-0 ml-1" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
-            {pendingCount}
-          </div>
-          <div className="text-[11px] text-[#69776E] truncate">Awaiting manager approval</div>
-        </div>
-
-        <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
-          <div className="text-xs text-[#143628] font-medium flex items-center justify-between">
-            <span className="truncate">Ready for Tech</span>
-            <Wrench className="w-4 h-4 text-[#1B4332] shrink-0 ml-1" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
-            {approvedCount}
-          </div>
-          <div className="text-[11px] text-[#69776E] truncate">Approved, ready for AI Dispatch</div>
-        </div>
-
-        <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
-          <div className="text-xs text-[#1B4332] font-medium flex items-center justify-between">
-            <span className="truncate">Active Dispatches</span>
-            <TrendingUp className="w-4 h-4 text-[#2D6A4F] shrink-0 ml-1" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
-            {activeCount}
-          </div>
-          <div className="text-[11px] text-[#69776E] truncate">Assigned & scheduled</div>
-        </div>
-
-        <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs">
-          <div className="text-xs text-emerald-800 font-medium flex items-center justify-between">
-            <span className="truncate">Completed</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 ml-1" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
-            {completedCount}
-          </div>
-          <div className="text-[11px] text-[#69776E] truncate">Successfully resolved</div>
-        </div>
-
-        <div className="p-5 bg-white border border-[#E8E2D8] rounded-xl space-y-1 shadow-2xs col-span-2 min-[640px]:col-span-1">
-          <div className="text-xs text-[#526056] font-medium flex items-center justify-between">
-            <span className="truncate">Field Techs</span>
-            <Users className="w-4 h-4 text-[#8C9B90] shrink-0 ml-1" />
-          </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#143628] font-mono tabular-nums">
-            {technicians.length}
-          </div>
-          <div className="text-[11px] text-[#69776E] truncate">
-            {availableTechs} available for dispatch
-          </div>
-        </div>
-      </div>
-
-      {/* Two Column Layout: Dispatches + Sidebar widgets */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          {/* 1. Pending & Unassigned Dispatches */}
-          <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
-            <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3] gap-2">
-              <div className="min-w-0">
-                <h3 className="font-serif text-lg font-bold text-[#143628] truncate">
-                  Pending & Unassigned Dispatches
-                </h3>
-                <p className="text-xs text-[#69776E] mt-0.5 truncate">
-                  Step 1: Approve pending tickets · Step 2: Confirm AI Dispatch & schedule
-                </p>
-              </div>
-              <button
-                onClick={() => onNavigateTab('requests')}
-                className="text-xs font-semibold text-[#143628] hover:underline flex items-center gap-1 cursor-pointer shrink-0"
-              >
-                <span>View All</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {urgentQueue.length === 0 ? (
-              <div className="text-center py-8 space-y-2">
-                <CheckCircle2 className="w-10 h-10 text-[#52B788] mx-auto" />
-                <div className="font-serif text-base font-bold text-[#143628]">
-                  All dispatches are up to date!
-                </div>
-                <p className="text-xs text-[#69776E] max-w-sm mx-auto">
-                  No tickets currently require approval or technician dispatch.
-                </p>
-              </div>
-            ) : (
-              <div className="divide-y divide-[#F0EBE3]">
-                {urgentQueue.map((req) => {
-                  const isBusy = Boolean(busyIds[req.id]);
-                  return (
-                    <div
-                      key={req.id}
-                      onClick={() => onSelectRequest(req)}
-                      className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#FAF8F5] px-2 rounded-lg transition-colors cursor-pointer group"
-                    >
-                      <div className="space-y-1.5 min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-mono font-semibold text-[#143628]">
-                            {req.ticketNumber}
-                          </span>
-                          <StatusBadge status={req.status} />
-                          <PriorityBadge priority={req.priority} />
-                          <span className="text-xs text-[#69776E] capitalize truncate">
-                            · {req.category}
-                          </span>
-                        </div>
-
-                        <h4 className="text-sm font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
-                          {req.title}
-                        </h4>
-
-                        <div className="flex items-center gap-3 sm:gap-4 text-xs text-[#69776E] flex-wrap">
-                          <span className="font-medium text-[#2C3830] truncate">
-                            Customer: {req.customerName}
-                          </span>
-                          <span className="flex items-center gap-1 font-mono">
-                            <Calendar className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
-                            <span>{req.preferredDate}</span>
-                          </span>
-                          {req.preferredTimeSlot && (
-                            <span className="flex items-center gap-1 font-mono">
-                              <Clock className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
-                              <span>{req.preferredTimeSlot}</span>
-                            </span>
-                          )}
-                          <span className="flex items-center gap-1 truncate max-w-xs">
-                            <MapPin className="w-3.5 h-3.5 text-[#8C9B90] shrink-0" />
-                            <span className="truncate">{req.serviceAddress.city}</span>
-                          </span>
-                        </div>
-                      </div>
-
-                      <div
-                        className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#F0EBE3]"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {req.status === 'pending' && onQuickApprove ? (
-                          <button
-                            onClick={() => handleRowApprove(req)}
-                            disabled={isBusy}
-                            className="px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer"
-                          >
-                            {isBusy ? 'Approving...' : 'Approve'}
-                          </button>
-                        ) : req.status === 'approved' && !req.assignedTechnicianId ? (
-                          <button
-                            onClick={() => handleRowAIDispatch(req)}
-                            disabled={isBusy}
-                            className="px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-md transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
-                          >
-                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                            <span>{isBusy ? 'Dispatching...' : 'AI Dispatch'}</span>
-                          </button>
-                        ) : (
-                          <span className="text-xs font-semibold text-[#143628] bg-[#EAE4D9] px-2 py-0.5 rounded border border-[#D8CFBE]">
-                            {req.status === 'pending' ? 'Needs Approval' : 'Ready for Dispatch'}
-                          </span>
-                        )}
-                        <button
-                          onClick={() => onSelectRequest(req)}
-                          className="p-1.5 text-[#8C9B90] hover:text-[#143628] rounded-md transition-colors cursor-pointer"
-                          title="Open Ticket Details"
-                        >
-                          <ArrowRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* 2. Scheduled & Active Dispatches (Assigned / Accepted / In Progress) */}
-          <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 sm:p-6 space-y-4 shadow-2xs">
-            <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3] gap-2">
-              <div className="min-w-0">
-                <h3 className="font-serif text-lg font-bold text-[#143628] truncate">
-                  Scheduled & Active Dispatches
-                </h3>
-                <p className="text-xs text-[#69776E] mt-0.5 truncate">
-                  Confirmed technician assignments and scheduled service appointments
-                </p>
-              </div>
-              <span className="text-xs font-mono font-semibold text-[#143628] bg-[#E2EFE7] px-2.5 py-1 rounded-md border border-[#BFDFCD] shrink-0">
-                {activeDispatches.length} Active
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="bg-white/10 border border-white/15 rounded-xl px-3.5 py-2 flex items-center gap-2">
+            <Users className="w-4 h-4 text-emerald-300" />
+            <div className="text-xs">
+              <span className="text-white/75 block">Available Techs</span>
+              <span className="font-bold">
+                {availableTechs} / {techProfiles.length}
               </span>
             </div>
+          </div>
 
-            {activeDispatches.length === 0 ? (
-              <div className="text-center py-6 text-xs text-[#69776E]">
-                No active scheduled dispatches right now. Dispatched jobs will appear here with their assigned technician and appointment time.
-              </div>
+          <button
+            onClick={handleRunAutoDispatch}
+            disabled={isAutoDispatching}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-white text-[#143628] hover:bg-[#FAF8F5] disabled:opacity-50 font-bold text-xs rounded-xl shadow-sm cursor-pointer"
+          >
+            {isAutoDispatching ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Dispatching...
+              </>
             ) : (
-              <div className="divide-y divide-[#F0EBE3]">
-                {activeDispatches.map((req) => (
+              <>
+                <Sparkles className="w-4 h-4 text-amber-500" />
+                AI Auto-Dispatch ({approvedUnassignedRequests.length})
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {autoDispatchBanner && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs font-medium ${
+            autoDispatchBanner.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <span>{autoDispatchBanner.text}</span>
+          <button
+            onClick={() => setAutoDispatchBanner(null)}
+            className="text-xs font-bold underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'dashboard' && (
+        <>
+          {/* KPI Summary Row */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">Total</span>
+                <ClipboardList className="w-4 h-4 text-[#143628]" />
+              </div>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">{requests.length}</p>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">Pending</span>
+                <Clock className="w-4 h-4 text-amber-600" />
+              </div>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">
+                {pendingApprovalRequests.length}
+              </p>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">Urgent Active</span>
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+              </div>
+              <p className="text-2xl font-bold text-red-700 mt-1">
+                {urgentActiveRequests.length}
+              </p>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">In Field</span>
+                <Wrench className="w-4 h-4 text-purple-600" />
+              </div>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">{activeJobs.length}</p>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">Reschedules</span>
+                <RefreshCw className="w-4 h-4 text-amber-600" />
+              </div>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">
+                {pendingReschedules.length}
+              </p>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-[#5C5852]">Completed</span>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              </div>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">
+                {completedRequests.length}
+              </p>
+            </div>
+          </div>
+
+          {/* Manager Fee Management Card */}
+          <div className="bg-white rounded-xl border border-[#E6E1D6] p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[#18181B]">
+                  Service Category Hourly Rates (PKR)
+                </h2>
+                <p className="text-xs text-[#5C5852]">
+                  Standard rates applied to service requests and payment summaries.
+                </p>
+              </div>
+              {!showFeeEditor && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeeBanner(null);
+                    setShowFeeEditor(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#143628] hover:bg-[#0f291e] text-white text-xs font-semibold cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Edit Service Prices
+                </button>
+              )}
+            </div>
+
+            {feeBanner && (
+              <div
+                className={`p-2.5 rounded-lg border text-xs font-medium flex items-center justify-between ${
+                  feeBanner.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : 'bg-red-50 border-red-200 text-red-800'
+                }`}
+              >
+                <span>{feeBanner.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setFeeBanner(null)}
+                  className="text-xs font-bold underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {showFeeEditor ? (
+              <form onSubmit={handleSaveServicePrices} className="space-y-3 pt-1">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                  {SERVICE_CATEGORIES.map((item) => (
+                    <div
+                      key={item.key}
+                      className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]"
+                    >
+                      <label className="block text-[11px] font-bold text-[#18181B] mb-1">
+                        {item.label} (PKR/hr)
+                      </label>
+                      <input
+                        type="number"
+                        min={100}
+                        max={500000}
+                        step={50}
+                        value={editingRates[item.key]}
+                        onChange={(e) =>
+                          setEditingRates((prev) => ({
+                            ...prev,
+                            [item.key]: e.target.value,
+                          }))
+                        }
+                        required
+                        className="w-full px-2.5 py-1.5 bg-white border border-[#E6E1D6] rounded text-xs font-bold text-[#143628]"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-xs text-[#5C5852] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={syncTechRatesOnSave}
+                      onChange={(e) => setSyncTechRatesOnSave(e.target.checked)}
+                      className="rounded border-gray-300 text-[#143628]"
+                    />
+                    <span>Sync matching technicians' hourly rates in Supabase</span>
+                  </label>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowFeeEditor(false)}
+                      className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingRates}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      {isSavingRates ? 'Saving...' : 'Save Prices'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                {SERVICE_CATEGORIES.map((item) => (
                   <div
-                    key={req.id}
-                    onClick={() => onSelectRequest(req)}
-                    className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#FAF8F5] px-2 rounded-lg transition-colors cursor-pointer group"
+                    key={item.key}
+                    className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]"
                   >
-                    <div className="space-y-1.5 min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-mono font-semibold text-[#143628]">
-                          {req.ticketNumber}
-                        </span>
-                        <StatusBadge status={req.status} />
-                        <PriorityBadge priority={req.priority} />
-                        <span className="text-xs text-[#69776E] capitalize truncate">
-                          · {req.category}
-                        </span>
-                      </div>
-
-                      <h4 className="text-sm font-semibold text-[#1F2421] group-hover:text-[#143628] transition-colors truncate">
-                        {req.title}
-                      </h4>
-
-                      <div className="flex items-center gap-3 text-xs text-[#69776E] flex-wrap">
-                        {req.assignedTechnicianName && (
-                          <span className="inline-flex items-center gap-1 text-indigo-800 font-semibold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                            <UserCheck className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                            <span>{req.assignedTechnicianName}</span>
-                          </span>
-                        )}
-                        <span className="inline-flex items-center gap-1 font-mono text-[#143628] font-semibold bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E8E2D8]">
-                          <Calendar className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
-                          <span>{req.preferredDate}</span>
-                        </span>
-                        <span className="inline-flex items-center gap-1 font-mono text-[#143628] font-semibold bg-[#FAF8F5] px-2 py-0.5 rounded border border-[#E8E2D8]">
-                          <Clock className="w-3.5 h-3.5 text-[#2D6A4F] shrink-0" />
-                          <span>{req.preferredTimeSlot || '09:00 - 11:00'}</span>
-                        </span>
-                        <span className="text-[#526056] truncate">
-                          Customer: {req.customerName}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2 shrink-0">
-                      <ArrowRight className="w-4 h-4 text-[#8C9B90] group-hover:text-[#143628] group-hover:translate-x-0.5 transition-all" />
-                    </div>
+                    <span className="text-[11px] font-semibold text-[#5C5852] block">
+                      {item.label}
+                    </span>
+                    <span className="text-sm font-bold text-[#143628]">
+                      {formatHourlyRate(categoryRates[item.key])}
+                    </span>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        </div>
 
-        {/* Right Side Roster & Customers */}
-        <div className="space-y-6">
-          <div className="bg-white border border-[#E8E2D8] rounded-xl p-5 space-y-4 shadow-2xs">
-            <div className="flex items-center justify-between pb-2 border-b border-[#F0EBE3] text-xs">
-              <h4 className="font-serif font-bold text-base text-[#143628]">
-                Technician Roster & Fees
-              </h4>
-              <button
-                onClick={() => onNavigateTab('technicians')}
-                className="text-xs font-semibold text-[#143628] hover:underline cursor-pointer"
-              >
-                Edit Fees
-              </button>
+          {/* Priority Dispatch Queue & Technician Roster */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 bg-white rounded-xl border border-[#E6E1D6] overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-[#E6E1D6] flex items-center justify-between bg-[#FAF8F5]">
+                <div>
+                  <h2 className="text-sm font-bold text-[#18181B]">
+                    Approval & Dispatch Queue ({queueRequests.length})
+                  </h2>
+                  <p className="text-[11px] text-[#5C5852]">
+                    Urgent requests are prioritized first for available specialists
+                  </p>
+                </div>
+              </div>
+
+              {queueRequests.length === 0 ? (
+                <div className="p-8 text-center">
+                  <CheckCircle2 className="w-7 h-7 text-emerald-500 mx-auto mb-1.5" />
+                  <p className="text-xs font-bold text-[#18181B]">Queue Clear</p>
+                  <p className="text-xs text-[#5C5852] mt-0.5">
+                    All incoming requests have been approved and dispatched.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-[#E6E1D6]">
+                  {queueRequests.slice(0, 8).map((req) => {
+                    const payment = SupabaseService.computePaymentSummary(req);
+                    return (
+                      <div
+                        key={req.id}
+                        onClick={() => handleRequestSelect(req)}
+                        className="p-4 hover:bg-[#FAF8F5] transition-colors cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="w-9 h-9 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6] flex items-center justify-center shrink-0 mt-0.5">
+                            <CategoryIcon
+                              category={req.category}
+                              className="w-4 h-4 text-[#143628]"
+                            />
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-mono font-bold text-[#143628]">
+                                {req.ticketNumber}
+                              </span>
+                              <StatusBadge status={req.status} size="sm" />
+                              <PriorityBadge priority={req.priority} size="sm" />
+                            </div>
+                            <h3 className="text-sm font-bold text-[#18181B] mt-0.5">
+                              {req.title}
+                            </h3>
+                            <p className="text-xs text-[#5C5852] mt-0.5 flex flex-wrap items-center gap-2">
+                              <span>{req.customerName}</span>
+                              <span>·</span>
+                              <span className="flex items-center gap-1">
+                                <Calendar className="w-3 h-3 text-[#143628]" />
+                                {req.preferredDate} · {req.preferredTimeSlot}
+                              </span>
+                              <span>·</span>
+                              <span className="font-semibold text-[#143628]">
+                                {formatPrice(payment.totalAmount)}
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+
+                        <div
+                          className="flex items-center gap-2 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {req.status === 'pending' && (
+                            <button
+                              onClick={(e) => handleApproveAction(req, e)}
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+                            >
+                              Approve
+                            </button>
+                          )}
+
+                          {req.status === 'approved' && !req.assignedTechnicianId && (
+                            <button
+                              onClick={(e) => handleDispatchAction(req, e)}
+                              disabled={singleDispatchingId === req.id}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white cursor-pointer"
+                            >
+                              {singleDispatchingId === req.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                              )}
+                              AI Dispatch
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => handleRequestSelect(req)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-gray-100 text-[#18181B] border border-[#E6E1D6] cursor-pointer"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            {technicians.length === 0 ? (
-              <div className="text-center py-6 text-xs text-[#69776E] space-y-2">
-                <p>No field technicians registered.</p>
-                <button
-                  onClick={onOpenCreateTech}
-                  className="px-3.5 py-1.5 bg-[#143628] text-white rounded-lg text-xs font-medium cursor-pointer"
-                >
-                  + Add First Tech
-                </button>
+            {/* Technician Roster Summary */}
+            <div className="bg-white rounded-xl border border-[#E6E1D6] overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-[#E6E1D6] bg-[#FAF8F5] flex items-center justify-between">
+                <h2 className="text-sm font-bold text-[#18181B]">
+                  Technician Status ({technicians.length})
+                </h2>
+                {onOpenCreateTech && (
+                  <button
+                    onClick={onOpenCreateTech}
+                    className="text-xs font-semibold text-[#143628] hover:underline cursor-pointer"
+                  >
+                    + Add Tech
+                  </button>
+                )}
               </div>
-            ) : (
-              <div className="space-y-3">
-                {technicians.slice(0, 5).map((tech) => {
-                  const prof =
-                    techProfiles.find((p) => p.id === tech.id || p.userId === tech.id) ||
-                    store.getTechnicianProfile(tech.id);
-                  return (
-                    <div key={tech.id} className="flex items-center justify-between text-xs gap-2 min-w-0">
-                      <div className="truncate min-w-0 flex-1">
-                        <div className="font-semibold text-[#1F2421] truncate">{tech.fullName}</div>
-                        <div className="text-[11px] text-[#69776E] truncate flex items-center gap-1.5">
-                          <span>{prof?.specialty || 'General Field Tech'}</span>
-                          <span>·</span>
-                          <span className="font-mono font-semibold text-[#143628]">
-                            {formatHourlyPrice(prof?.hourlyRate, 2000)}
+
+              {technicians.length === 0 ? (
+                <div className="p-6 text-center text-xs text-[#5C5852]">
+                  No technicians registered in Supabase.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#E6E1D6]">
+                  {technicians.map((tech) => {
+                    const prof = techProfiles.find((p) => p.userId === tech.id);
+                    const activeCount = requests.filter(
+                      (r) =>
+                        r.assignedTechnicianId === tech.id &&
+                        ['assigned', 'accepted', 'in_progress'].includes(r.status)
+                    ).length;
+
+                    return (
+                      <div
+                        key={tech.id}
+                        className="p-3.5 flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <p className="font-bold text-[#18181B]">{tech.fullName}</p>
+                          <p className="text-[#5C5852]">
+                            {prof?.specialty || 'General'} ·{' '}
+                            {formatHourlyRate(prof?.hourlyRate || 2000)}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              prof?.status === 'available'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : prof?.status === 'on_job'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {prof?.status === 'available'
+                              ? 'Available'
+                              : prof?.status === 'on_job'
+                              ? 'On Job'
+                              : 'Off Duty'}
+                          </span>
+                          <span className="block text-[11px] text-[#5C5852] mt-0.5">
+                            {activeCount}/3 jobs
                           </span>
                         </div>
                       </div>
-                      <span
-                        className={`text-[10px] font-mono px-2 py-0.5 rounded capitalize shrink-0 font-medium ${
-                          prof?.status === 'available'
-                            ? 'bg-[#E2EFE7] text-[#1B4332] border border-[#BFDFCD]'
-                            : prof?.status === 'on_job'
-                            ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                            : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}
-                      >
-                        {prof?.status?.replace('_', ' ') || 'available'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
+        </>
+      )}
 
-          {/* Customer Base Info */}
-          <div className="bg-[#F5F2EB] border border-[#E8E2D8] rounded-xl p-5 space-y-2">
-            <div className="flex items-center justify-between pb-2 border-b border-[#E2DBD0] text-xs">
-              <span className="font-serif font-bold text-sm text-[#143628]">Customer Base</span>
-              <button
-                onClick={() => onNavigateTab('customers')}
-                className="text-xs font-semibold text-[#143628] hover:underline"
-              >
-                View ({customers.length})
-              </button>
-            </div>
-            <div className="text-xs text-[#526056] leading-relaxed">
-              {customers.length === 0
-                ? 'No registered customers yet.'
-                : `${customers.length} customer account(s) registered with ${requests.length} total work orders tracked.`}
-            </div>
-          </div>
-        </div>
-      </div>
+      {activeTab === 'requests' && (
+        <ManagerRequestsList
+          requests={requests}
+          onSelectRequest={(req) => handleRequestSelect(req)}
+          onQuickApprove={handleApproveAction}
+          onQuickAIDispatch={handleDispatchAction}
+          dispatchingId={singleDispatchingId}
+        />
+      )}
+
+      {activeTab === 'ai-insights' && (
+        <ManagerAIInsights
+          requests={requests}
+          technicians={technicians}
+          technicianProfiles={techProfiles}
+        />
+      )}
+
+      {activeTab === 'technicians' && (
+        <ManagerTechniciansList
+          technicians={technicians}
+          technicianProfiles={techProfiles}
+          requests={requests}
+          onOpenCreateTech={() => onOpenCreateTech?.()}
+          onRefresh={() => onRefresh?.()}
+        />
+      )}
+
+      {activeTab === 'audit' && <ManagerAuditLogs />}
+
+      {activeSelectedRequest && currentUser && (
+        <ManagerRequestDetailModal
+          request={activeSelectedRequest}
+          currentUser={currentUser}
+          onClose={() => setSelectedRequest(null)}
+          onUpdated={() => onRefresh?.()}
+        />
+      )}
     </div>
   );
 };
-

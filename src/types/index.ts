@@ -26,6 +26,54 @@ export interface ServiceAddress {
   state: string;
   zip: string;
   contactPhone?: string;
+  latitude?: number;
+  longitude?: number;
+  accuracyMeters?: number;
+  formattedAddress?: string;
+}
+
+export type RescheduleStatus = 'pending' | 'accepted' | 'declined';
+
+export interface RescheduleProposal {
+  id: string;
+  requestedByRole: UserRole;
+  requestedById: string;
+  requestedByUserId?: string;
+  requestedByName: string;
+  originalDate: string;
+  originalTimeSlot: string;
+  previousDate?: string;
+  previousTimeSlot?: string;
+  proposedDate: string;
+  proposedTimeSlot: string;
+  reason: string;
+  status: RescheduleStatus;
+  createdAt: string;
+  respondedAt?: string;
+  respondedById?: string;
+  respondedByName?: string;
+  respondedByRole?: UserRole;
+  responseNote?: string;
+}
+
+export type PaymentStatus = 'unpaid' | 'partially_paid' | 'paid';
+export type PaymentMethod = 'cash' | 'online' | 'unrecorded';
+
+export interface PaymentRecord {
+  totalAmount: number;
+  amountPaid: number;
+  remainingBalance: number;
+  status: PaymentStatus;
+  method?: PaymentMethod;
+  transactionReference?: string;
+  verifiedOnline?: boolean;
+  updatedAt?: string;
+  updatedById?: string;
+  updatedByName?: string;
+  updatedByRole?: UserRole;
+  verifiedByUserId?: string;
+  verifiedByName?: string;
+  verifiedByRole?: UserRole;
 }
 
 export interface User {
@@ -52,10 +100,11 @@ export interface TechnicianProfile {
 }
 
 export interface PartItem {
-  id: string;
+  id?: string;
   name: string;
   quantity: number;
   unitPrice: number;
+  unitCost?: number;
 }
 
 export interface ServiceRating {
@@ -95,6 +144,9 @@ export interface ServiceRequest {
   laborHours?: number;
   resolutionSummary?: string;
   rating?: ServiceRating;
+  rescheduleRequest?: RescheduleProposal;
+  rescheduleHistory?: RescheduleProposal[];
+  payment?: PaymentRecord;
   createdAt: string;
   updatedAt: string;
 }

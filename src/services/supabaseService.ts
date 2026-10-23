@@ -19,6 +19,10 @@ import {
   ServiceRating,
   AutoDispatchResult,
   AIDispatchCandidate,
+  RescheduleProposal,
+  PaymentRecord,
+  PaymentMethod,
+  PaymentStatus,
 } from '../types';
 import { store } from './store';
 import {
@@ -37,32 +41,60 @@ export function mapSupabaseToServiceRequest(row: any): ServiceRequest {
     state: '',
     zip: '',
   };
+  let rawAddrObj: any = null;
 
   if (row.service_address) {
     if (typeof row.service_address === 'object' && row.service_address !== null) {
-      parsedAddress = {
-        street: row.service_address.street || '',
-        unit: row.service_address.unit || undefined,
-        city: row.service_address.city || '',
-        state: row.service_address.state || '',
-        zip: row.service_address.zip || '',
-        contactPhone: row.service_address.contactPhone || row.service_address.contact_phone || undefined,
-      };
+      rawAddrObj = row.service_address;
     } else if (typeof row.service_address === 'string') {
       try {
-        const obj = JSON.parse(row.service_address);
-        parsedAddress = {
-          street: obj?.street || '',
-          unit: obj?.unit || undefined,
-          city: obj?.city || '',
-          state: obj?.state || '',
-          zip: obj?.zip || '',
-          contactPhone: obj?.contactPhone || obj?.contact_phone || undefined,
-        };
+        rawAddrObj = JSON.parse(row.service_address);
       } catch {
         parsedAddress = { street: String(row.service_address), city: '', state: '', zip: '' };
       }
     }
+  }
+
+  if (rawAddrObj && typeof rawAddrObj === 'object') {
+    parsedAddress = {
+      street: rawAddrObj.street || '',
+      unit: rawAddrObj.unit || undefined,
+      city: rawAddrObj.city || '',
+      state: rawAddrObj.state || '',
+      zip: rawAddrObj.zip || '',
+      contactPhone: rawAddrObj.contactPhone || rawAddrObj.contact_phone || undefined,
+      latitude:
+        typeof rawAddrObj.latitude === 'number' && Number.isFinite(rawAddrObj.latitude)
+          ? rawAddrObj.latitude
+          : undefined,
+      longitude:
+        typeof rawAddrObj.longitude === 'number' && Number.isFinite(rawAddrObj.longitude)
+          ? rawAddrObj.longitude
+          : undefined,
+      accuracyMeters:
+        typeof rawAddrObj.accuracyMeters === 'number' && Number.isFinite(rawAddrObj.accuracyMeters)
+          ? rawAddrObj.accuracyMeters
+          : undefined,
+      formattedAddress: rawAddrObj.formattedAddress || undefined,
+    };
+  }
+
+  let parsedRescheduleRequest: RescheduleProposal | undefined = undefined;
+  const rawReschedule = row.reschedule_request || rawAddrObj?._rescheduleRequest;
+  if (rawReschedule && typeof rawReschedule === 'object' && rawReschedule.proposedDate) {
+    parsedRescheduleRequest = rawReschedule as RescheduleProposal;
+  }
+
+  let parsedRescheduleHistory: RescheduleProposal[] = [];
+  const rawHistory = row.reschedule_history || rawAddrObj?._rescheduleHistory;
+  if (Array.isArray(rawHistory)) {
+    parsedRescheduleHistory = rawHistory;
+  }
+
+  let parsedPayment: PaymentRecord | undefined = undefined;
+  const rawPayment = row.payment_info || rawAddrObj?._paymentInfo;
+  if (rawPayment && typeof rawPayment === 'object' && typeof rawPayment.totalAmount === 'number') {
+    parsedPayment = rawPayment as PaymentRecord;
   }
 
   let parsedParts: PartItem[] = [];
@@ -132,6 +164,9 @@ export function mapSupabaseToServiceRequest(row: any): ServiceRequest {
     laborHours: row.labor_hours ? Number(row.labor_hours) : undefined,
     resolutionSummary: row.resolution_summary || undefined,
     rating: parsedRating,
+    rescheduleRequest: parsedRescheduleRequest,
+    rescheduleHistory: parsedRescheduleHistory,
+    payment: parsedPayment,
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
   };
@@ -982,9 +1017,9 @@ export class SupabaseService {
     const targetKeywords = categoryKeywords[params.category] || [categoryLower];
 
     const specialistCandidates: AIDispatchCandidate[] = [];
-    const fallbackCandidates: AIDispatchCandidate[] = [];
     let skippedForWorkload = 0;
     let skippedForSchedule = 0;
+    let skippedForSkillMismatch = 0;
 
     for (const prof of availableProfiles) {
       const techUser = technicians.find(
@@ -1074,6 +1109,12 @@ export class SupabaseService {
         reasons.push(`General maintenance qualification (${prof.specialty})`);
       }
 
+      // Strict skill matching requirement: Never assign an unsuitable technician lacking required skill
+      if (skillScore === 0) {
+        skippedForSkillMismatch++;
+        continue;
+      }
+
       // Compute quality, schedule fit, and workload balance adjustments
       let totalScore = skillScore;
 
@@ -1092,7 +1133,7 @@ export class SupabaseService {
       // Workload balancing penalty (favor technicians with fewer active assignments)
       totalScore -= totalActiveJobs * 25;
 
-      const candidateObj: AIDispatchCandidate = {
+      specialistCandidates.push({
         technician: techUser,
         profile: prof,
         matchScore: totalScore,
@@ -1101,37 +1142,24 @@ export class SupabaseService {
         scheduledTimeSlot: scheduleSlot.scheduledTimeSlot,
         scheduleAdjusted: scheduleSlot.scheduleAdjusted,
         activeWorkload: totalActiveJobs,
-      };
-
-      if (skillScore > 0) {
-        specialistCandidates.push(candidateObj);
-      } else {
-        // Cross-trade fallback candidate if no category specialist is available in the roster
-        fallbackCandidates.push({
-          ...candidateObj,
-          matchScore: totalScore + 15,
-          matchReason: `Available certified technician (${prof.specialty}) · ${
-            !scheduleSlot.scheduleAdjusted
-              ? `Available at preferred slot (${scheduleSlot.scheduledDate} · ${scheduleSlot.scheduledTimeSlot})`
-              : `Scheduled for next conflict-free slot (${scheduleSlot.scheduledDate} · ${scheduleSlot.scheduledTimeSlot})`
-          } [Active workload: ${totalActiveJobs}/3]`,
-        });
-      }
+      });
     }
 
     specialistCandidates.sort((a, b) => b.matchScore - a.matchScore);
-    fallbackCandidates.sort((a, b) => b.matchScore - a.matchScore);
 
-    const allCandidates =
-      specialistCandidates.length > 0
-        ? [...specialistCandidates, ...fallbackCandidates]
-        : fallbackCandidates;
-
-    if (allCandidates.length > 0) {
+    if (specialistCandidates.length > 0) {
       return {
-        bestCandidate: allCandidates[0],
-        allCandidates,
-        diagnosticReason: allCandidates[0].matchReason,
+        bestCandidate: specialistCandidates[0],
+        allCandidates: specialistCandidates,
+        diagnosticReason: specialistCandidates[0].matchReason,
+      };
+    }
+
+    if (skippedForSkillMismatch > 0 && skippedForWorkload === 0 && skippedForSchedule === 0) {
+      return {
+        bestCandidate: null,
+        allCandidates: [],
+        diagnosticReason: `No available technician has the required ${params.category} skill or qualification (${skippedForSkillMismatch} available technician(s) specialize in other trades).`,
       };
     }
 
@@ -1147,14 +1175,14 @@ export class SupabaseService {
       return {
         bestCandidate: null,
         allCandidates: [],
-        diagnosticReason: `All available technicians have conflicting appointments during working hours (9:00 AM – 6:00 PM) across upcoming dates.`,
+        diagnosticReason: `All qualified technicians have conflicting appointments during working hours (9:00 AM – 6:00 PM) across upcoming dates.`,
       };
     }
 
     return {
       bestCandidate: null,
       allCandidates: [],
-      diagnosticReason: `No suitable available technician or working-hours time slot (9:00 AM – 6:00 PM) found for ${params.category} service request.`,
+      diagnosticReason: `No suitable available technician with ${params.category} skill or working-hours time slot (9:00 AM – 6:00 PM) found.`,
     };
   }
 
@@ -2518,6 +2546,88 @@ export class SupabaseService {
     }
   }
 
+  public static async rejectServiceRequest(
+    requestId: string,
+    reason: string,
+    technician: User
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.declineServiceRequest(requestId, reason, technician);
+  }
+
+  public static async startServiceRequest(
+    requestId: string,
+    technician: User
+  ): Promise<{ success: boolean; error?: string; request?: ServiceRequest }> {
+    return this.startWork(requestId, technician);
+  }
+
+  public static async completeServiceRequest(
+    requestId: string,
+    params: {
+      resolutionSummary: string;
+      workNotes?: string;
+      laborHours: number;
+      partsUsed?: PartItem[];
+    },
+    technician: User
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.completeWork(requestId, params, technician);
+  }
+
+  public static async updateWorkProgress(
+    requestId: string,
+    params: {
+      workNotes?: string;
+      partsUsed?: PartItem[];
+      laborHours?: number;
+    },
+    technician: User
+  ): Promise<{ success: boolean; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) {
+      const req = store.getRequests().find((r) => r.id === requestId);
+      if (req) {
+        req.workNotes = params.workNotes;
+        req.partsUsed = params.partsUsed;
+        req.laborHours = params.laborHours;
+      }
+      return { success: true };
+    }
+
+    try {
+      const nowIso = new Date().toISOString();
+      const { error: updateErr } = await client
+        .from('service_requests')
+        .update({
+          work_notes: params.workNotes || null,
+          parts_used: params.partsUsed || [],
+          labor_hours: params.laborHours ?? null,
+          updated_at: nowIso,
+        })
+        .eq('id', requestId);
+
+      if (updateErr) return { success: false, error: updateErr.message };
+
+      try {
+        await client.from('service_request_logs').insert({
+          request_id: requestId,
+          from_status: 'in_progress',
+          to_status: 'in_progress',
+          changed_by_user_id: technician.id,
+          changed_by_name: technician.fullName,
+          changed_by_role: 'technician',
+          note: `Technician updated work notes and parts (${params.laborHours || 0}h labor).`,
+        });
+      } catch {
+        // Non-fatal log
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
   public static async cancelServiceRequest(
     requestId: string,
     reason: string,
@@ -2578,6 +2688,725 @@ export class SupabaseService {
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Builds a clean JSONB payload for public.service_requests.service_address
+   * that preserves address fields, GPS coordinates, rescheduling state, and payment records.
+   */
+  private static buildServiceAddressPayload(
+    req: ServiceRequest,
+    overrides?: {
+      rescheduleRequest?: RescheduleProposal | null;
+      rescheduleHistory?: RescheduleProposal[];
+      payment?: PaymentRecord;
+    }
+  ): Record<string, any> {
+    const base: Record<string, any> = {
+      street: req.serviceAddress.street || '',
+      city: req.serviceAddress.city || '',
+      state: req.serviceAddress.state || '',
+      zip: req.serviceAddress.zip || '',
+    };
+    if (req.serviceAddress.unit) base.unit = req.serviceAddress.unit;
+    if (req.serviceAddress.contactPhone) base.contactPhone = req.serviceAddress.contactPhone;
+    if (typeof req.serviceAddress.latitude === 'number') base.latitude = req.serviceAddress.latitude;
+    if (typeof req.serviceAddress.longitude === 'number') base.longitude = req.serviceAddress.longitude;
+    if (typeof req.serviceAddress.accuracyMeters === 'number') {
+      base.accuracyMeters = req.serviceAddress.accuracyMeters;
+    }
+    if (req.serviceAddress.formattedAddress) {
+      base.formattedAddress = req.serviceAddress.formattedAddress;
+    }
+
+    const resReq =
+      overrides && 'rescheduleRequest' in overrides
+        ? overrides.rescheduleRequest
+        : req.rescheduleRequest;
+    if (resReq) {
+      base._rescheduleRequest = resReq;
+    }
+
+    const resHist =
+      overrides && overrides.rescheduleHistory !== undefined
+        ? overrides.rescheduleHistory
+        : req.rescheduleHistory;
+    if (Array.isArray(resHist) && resHist.length > 0) {
+      base._rescheduleHistory = resHist;
+    }
+
+    const pay = overrides && overrides.payment !== undefined ? overrides.payment : req.payment;
+    if (pay) {
+      base._paymentInfo = pay;
+    }
+
+    return base;
+  }
+
+  /**
+   * TECHNICIAN & CUSTOMER RESCHEDULING:
+   * Submits or counter-proposes a reschedule request while preserving the original appointment
+   * until the relevant party accepts it.
+   */
+  public static async requestReschedule(
+    requestId: string,
+    params: {
+      proposedDate: string;
+      proposedTimeSlot: string;
+      reason: string;
+    },
+    actor: User
+  ): Promise<{ success: boolean; request?: ServiceRequest; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return store.requestReschedule(requestId, params, actor);
+    }
+
+    if (!params.reason || !params.reason.trim()) {
+      return { success: false, error: 'Please provide a reason for rescheduling.' };
+    }
+    if (!params.proposedDate || !params.proposedDate.trim()) {
+      return { success: false, error: 'Please select a proposed date.' };
+    }
+
+    const slotValidation = this.validateWorkingHoursSlot(params.proposedTimeSlot);
+    if (!slotValidation.valid) {
+      return {
+        success: false,
+        error:
+          slotValidation.error ||
+          'Proposed appointment time must be within working hours (9:00 AM – 6:00 PM).',
+      };
+    }
+
+    const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+      .toISOString()
+      .split('T')[0];
+    const cleanedDate = params.proposedDate.trim().split('T')[0];
+    if (cleanedDate < todayStr) {
+      return { success: false, error: 'Proposed appointment date cannot be in the past.' };
+    }
+
+    try {
+      const { data: reqRow, error: fetchErr } = await client
+        .from('service_requests')
+        .select('*')
+        .eq('id', requestId)
+        .maybeSingle();
+
+      if (fetchErr || !reqRow) {
+        return { success: false, error: 'Service request not found.' };
+      }
+
+      const req = mapSupabaseToServiceRequest(reqRow);
+
+      if (['completed', 'cancelled'].includes(req.status)) {
+        return {
+          success: false,
+          error: `Cannot reschedule a ${req.status} service request.`,
+        };
+      }
+
+      if (actor.role === 'customer' && req.customerId !== actor.id) {
+        return {
+          success: false,
+          error: 'Unauthorized: You can only reschedule your own service requests.',
+        };
+      }
+
+      if (actor.role === 'technician' && req.assignedTechnicianId !== actor.id) {
+        return {
+          success: false,
+          error: 'Unauthorized: You can only request a reschedule for jobs assigned to you.',
+        };
+      }
+
+      // Check schedule conflicts if a technician is assigned
+      if (req.assignedTechnicianId) {
+        const allRequests = await this.fetchServiceRequests();
+        const conflictCheck = this.hasTechnicianScheduleConflict({
+          technicianId: req.assignedTechnicianId,
+          dateStr: cleanedDate,
+          timeSlot: slotValidation.canonical,
+          allRequests,
+          excludeRequestId: req.id,
+        });
+
+        if (conflictCheck.conflict) {
+          return {
+            success: false,
+            error: `Schedule conflict: Assigned technician already has an appointment (${conflictCheck.conflictingTicket}) on ${cleanedDate} during ${conflictCheck.conflictingSlot || slotValidation.canonical}. Please choose another time slot.`,
+          };
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const history: RescheduleProposal[] = Array.isArray(req.rescheduleHistory)
+        ? [...req.rescheduleHistory]
+        : [];
+
+      if (req.rescheduleRequest && req.rescheduleRequest.status === 'pending') {
+        history.push({
+          ...req.rescheduleRequest,
+          status: 'declined',
+          respondedAt: nowIso,
+          respondedByName: actor.fullName,
+          respondedByRole: actor.role,
+          responseNote: 'Superseded by a new counter-proposal',
+        });
+      }
+
+      const proposal: RescheduleProposal = {
+        id: `rsch-${Date.now()}`,
+        requestedById: actor.id,
+        requestedByUserId: actor.id,
+        requestedByName: actor.fullName,
+        requestedByRole: actor.role,
+        reason: params.reason.trim(),
+        proposedDate: cleanedDate,
+        proposedTimeSlot: slotValidation.canonical,
+        originalDate: req.preferredDate,
+        originalTimeSlot: req.preferredTimeSlot,
+        previousDate: req.preferredDate,
+        previousTimeSlot: req.preferredTimeSlot,
+        status: 'pending',
+        createdAt: nowIso,
+      };
+
+      const updatedAddressPayload = this.buildServiceAddressPayload(req, {
+        rescheduleRequest: proposal,
+        rescheduleHistory: history,
+      });
+
+      // Keep original preferred_date and preferred_time_slot intact until accepted
+      const { data: updatedRows, error: updateErr } = await client
+        .from('service_requests')
+        .update({
+          service_address: updatedAddressPayload,
+          updated_at: nowIso,
+        })
+        .eq('id', req.id)
+        .select('*');
+
+      if (updateErr) {
+        return { success: false, error: updateErr.message };
+      }
+
+      const updatedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+      if (!updatedRow) {
+        return {
+          success: false,
+          error: 'Could not save reschedule request in Supabase (check RLS update permissions).',
+        };
+      }
+
+      const updatedRequest = mapSupabaseToServiceRequest(updatedRow);
+
+      try {
+        store.requestReschedule(requestId, params, actor);
+      } catch {
+        // Non-fatal local sync
+      }
+
+      // Audit log
+      try {
+        await client.from('service_request_logs').insert({
+          request_id: req.id,
+          from_status: req.status,
+          to_status: req.status,
+          changed_by_user_id: actor.id,
+          changed_by_name: actor.fullName,
+          changed_by_role: actor.role,
+          note: `Reschedule requested by ${actor.role} (${actor.fullName}): Proposed ${cleanedDate} (${slotValidation.canonical}). Reason: ${params.reason.trim()} [Status: Pending Response]`,
+        });
+      } catch (logErr) {
+        console.warn('Reschedule log warning:', logErr);
+      }
+
+      // Notifications
+      try {
+        if (actor.role === 'technician') {
+          await client.from('notifications').insert({
+            recipient_user_id: req.customerId,
+            title: `Reschedule Requested: ${req.ticketNumber}`,
+            message: `Technician ${actor.fullName} requested to reschedule your appointment to ${cleanedDate} (${slotValidation.canonical}). Reason: "${params.reason.trim()}". Please accept or suggest another time.`,
+            request_id: req.id,
+            type: 'status_change',
+          });
+        } else if (actor.role === 'customer' && req.assignedTechnicianId) {
+          await client.from('notifications').insert({
+            recipient_user_id: req.assignedTechnicianId,
+            title: `Customer Reschedule Request: ${req.ticketNumber}`,
+            message: `Customer ${actor.fullName} requested to reschedule job ${req.ticketNumber} to ${cleanedDate} (${slotValidation.canonical}). Reason: "${params.reason.trim()}".`,
+            request_id: req.id,
+            type: 'status_change',
+          });
+        }
+
+        // Notify Managers
+        const { data: managers } = await client
+          .from('profiles')
+          .select('id')
+          .eq('role', 'manager');
+        if (managers && managers.length > 0) {
+          for (const m of managers) {
+            if (m.id === actor.id) continue;
+            await client.from('notifications').insert({
+              recipient_user_id: m.id,
+              title: `Reschedule Pending: ${req.ticketNumber}`,
+              message: `${actor.fullName} (${actor.role}) proposed rescheduling ${req.ticketNumber} to ${cleanedDate} (${slotValidation.canonical}). Reason: "${params.reason.trim()}".`,
+              request_id: req.id,
+              type: 'system',
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.warn('Reschedule notification warning:', notifErr);
+      }
+
+      return { success: true, request: updatedRequest };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to submit reschedule request.' };
+    }
+  }
+
+  /**
+   * Accepts or declines a pending reschedule request.
+   * Updates preferred_date and preferred_time_slot ONLY when accepted.
+   */
+  public static async respondToReschedule(
+    requestId: string,
+    decision: {
+      action: 'accept' | 'decline';
+      responseNote?: string;
+    },
+    actor: User
+  ): Promise<{ success: boolean; request?: ServiceRequest; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return store.respondToReschedule(requestId, decision, actor);
+    }
+
+    try {
+      const { data: reqRow, error: fetchErr } = await client
+        .from('service_requests')
+        .select('*')
+        .eq('id', requestId)
+        .maybeSingle();
+
+      if (fetchErr || !reqRow) {
+        return { success: false, error: 'Service request not found.' };
+      }
+
+      const req = mapSupabaseToServiceRequest(reqRow);
+      const proposal = req.rescheduleRequest;
+
+      if (!proposal || proposal.status !== 'pending') {
+        return {
+          success: false,
+          error: 'There is no pending reschedule request for this ticket.',
+        };
+      }
+
+      if (actor.role === 'customer' && req.customerId !== actor.id) {
+        return {
+          success: false,
+          error: 'Unauthorized: You can only respond to reschedule requests on your own tickets.',
+        };
+      }
+
+      if (actor.role === 'technician' && req.assignedTechnicianId !== actor.id) {
+        return {
+          success: false,
+          error: 'Unauthorized: You can only respond to reschedule requests on jobs assigned to you.',
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      const history: RescheduleProposal[] = Array.isArray(req.rescheduleHistory)
+        ? [...req.rescheduleHistory]
+        : [];
+
+      if (decision.action === 'accept') {
+        const slotValidation = this.validateWorkingHoursSlot(proposal.proposedTimeSlot);
+        if (!slotValidation.valid) {
+          return {
+            success: false,
+            error:
+              slotValidation.error ||
+              'Proposed time slot is outside working hours (9:00 AM – 6:00 PM).',
+          };
+        }
+
+        if (req.assignedTechnicianId) {
+          const allRequests = await this.fetchServiceRequests();
+          const conflictCheck = this.hasTechnicianScheduleConflict({
+            technicianId: req.assignedTechnicianId,
+            dateStr: proposal.proposedDate,
+            timeSlot: slotValidation.canonical,
+            allRequests,
+            excludeRequestId: req.id,
+          });
+          if (conflictCheck.conflict) {
+            return {
+              success: false,
+              error: `Cannot accept: Technician now has a conflicting appointment (${conflictCheck.conflictingTicket}) on ${proposal.proposedDate} during ${conflictCheck.conflictingSlot || slotValidation.canonical}. Please suggest another time.`,
+            };
+          }
+        }
+
+        const acceptedProposal: RescheduleProposal = {
+          ...proposal,
+          status: 'accepted',
+          respondedAt: nowIso,
+          respondedByName: actor.fullName,
+          respondedByRole: actor.role,
+          responseNote: decision.responseNote?.trim() || undefined,
+        };
+        history.push(acceptedProposal);
+
+        const updatedAddressPayload = this.buildServiceAddressPayload(req, {
+          rescheduleRequest: acceptedProposal,
+          rescheduleHistory: history,
+        });
+
+        const { data: updatedRows, error: updateErr } = await client
+          .from('service_requests')
+          .update({
+            preferred_date: proposal.proposedDate,
+            preferred_time_slot: slotValidation.canonical,
+            service_address: updatedAddressPayload,
+            updated_at: nowIso,
+          })
+          .eq('id', req.id)
+          .select('*');
+
+        if (updateErr) {
+          return { success: false, error: updateErr.message };
+        }
+
+        const updatedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+        if (!updatedRow) {
+          return {
+            success: false,
+            error: 'Failed to update appointment schedule in Supabase.',
+          };
+        }
+
+        const updatedRequest = mapSupabaseToServiceRequest(updatedRow);
+
+        try {
+          store.respondToReschedule(requestId, decision, actor);
+        } catch {
+          // Non-fatal local sync
+        }
+
+        try {
+          await client.from('service_request_logs').insert({
+            request_id: req.id,
+            from_status: req.status,
+            to_status: req.status,
+            changed_by_user_id: actor.id,
+            changed_by_name: actor.fullName,
+            changed_by_role: actor.role,
+            note: `Reschedule Accepted by ${actor.fullName} (${actor.role}): Appointment updated from ${proposal.previousDate} (${proposal.previousTimeSlot}) to ${proposal.proposedDate} (${slotValidation.canonical}).`,
+          });
+        } catch {
+          // Non-fatal log
+        }
+
+        try {
+          const recipientIds = new Set<string>();
+          if (req.customerId !== actor.id) recipientIds.add(req.customerId);
+          if (req.assignedTechnicianId && req.assignedTechnicianId !== actor.id) {
+            recipientIds.add(req.assignedTechnicianId);
+          }
+
+          const { data: managers } = await client
+            .from('profiles')
+            .select('id')
+            .eq('role', 'manager');
+          for (const m of managers || []) {
+            if (m.id !== actor.id) recipientIds.add(m.id);
+          }
+
+          for (const uid of recipientIds) {
+            await client.from('notifications').insert({
+              recipient_user_id: uid,
+              title: `Reschedule Confirmed: ${req.ticketNumber}`,
+              message: `${actor.fullName} accepted the new appointment time for ${req.ticketNumber}: ${proposal.proposedDate} (${slotValidation.canonical}).`,
+              request_id: req.id,
+              type: 'status_change',
+            });
+          }
+        } catch {
+          // Non-fatal notification
+        }
+
+        return { success: true, request: updatedRequest };
+      } else {
+        const declinedProposal: RescheduleProposal = {
+          ...proposal,
+          status: 'declined',
+          respondedAt: nowIso,
+          respondedByName: actor.fullName,
+          respondedByRole: actor.role,
+          responseNote: decision.responseNote?.trim() || undefined,
+        };
+        history.push(declinedProposal);
+
+        const updatedAddressPayload = this.buildServiceAddressPayload(req, {
+          rescheduleRequest: declinedProposal,
+          rescheduleHistory: history,
+        });
+
+        const { data: updatedRows, error: updateErr } = await client
+          .from('service_requests')
+          .update({
+            service_address: updatedAddressPayload,
+            updated_at: nowIso,
+          })
+          .eq('id', req.id)
+          .select('*');
+
+        if (updateErr) {
+          return { success: false, error: updateErr.message };
+        }
+
+        const updatedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+        if (!updatedRow) {
+          return {
+            success: false,
+            error: 'Failed to update reschedule status in Supabase.',
+          };
+        }
+
+        const updatedRequest = mapSupabaseToServiceRequest(updatedRow);
+
+        try {
+          store.respondToReschedule(requestId, decision, actor);
+        } catch {
+          // Non-fatal local sync
+        }
+
+        try {
+          await client.from('service_request_logs').insert({
+            request_id: req.id,
+            from_status: req.status,
+            to_status: req.status,
+            changed_by_user_id: actor.id,
+            changed_by_name: actor.fullName,
+            changed_by_role: actor.role,
+            note: `Reschedule Declined by ${actor.fullName} (${actor.role}). Original appointment remains ${req.preferredDate} (${req.preferredTimeSlot}).${decision.responseNote ? ` Note: ${decision.responseNote.trim()}` : ''}`,
+          });
+        } catch {
+          // Non-fatal log
+        }
+
+        try {
+          if (proposal.requestedByUserId !== actor.id) {
+            await client.from('notifications').insert({
+              recipient_user_id: proposal.requestedByUserId,
+              title: `Reschedule Declined: ${req.ticketNumber}`,
+              message: `${actor.fullName} declined the proposed reschedule (${proposal.proposedDate} · ${proposal.proposedTimeSlot}). Original schedule ${req.preferredDate} (${req.preferredTimeSlot}) remains active.`,
+              request_id: req.id,
+              type: 'status_change',
+            });
+          }
+        } catch {
+          // Non-fatal notification
+        }
+
+        return { success: true, request: updatedRequest };
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to respond to reschedule request.' };
+    }
+  }
+
+  /**
+   * Computes the current PKR Payment Summary for a service request from real labor, parts,
+   * category/technician rates, and confirmed payments stored in Supabase.
+   */
+  public static computePaymentSummary(
+    req: ServiceRequest,
+    hourlyRateOverride?: number
+  ): PaymentRecord {
+    return store.computePaymentSummary(req, hourlyRateOverride);
+  }
+
+  /**
+   * Records or updates a verified payment for a service request in Supabase.
+   * - Customers can view their own payments; Assigned Technicians (for their job) and Managers can record confirmed payments.
+   * - Online payments require verified confirmation and a transaction reference.
+   */
+  public static async updatePaymentRecord(
+    requestId: string,
+    params: {
+      totalAmount?: number;
+      amountPaid: number;
+      method: PaymentMethod;
+      transactionReference?: string;
+      verifiedOnline?: boolean;
+    },
+    actor: User
+  ): Promise<{ success: boolean; request?: ServiceRequest; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return store.updatePaymentRecord(requestId, params, actor);
+    }
+
+    if (actor.role !== 'manager' && actor.role !== 'technician') {
+      return {
+        success: false,
+        error: 'Unauthorized: Only the Assigned Technician or Operations Manager can record verified payments.',
+      };
+    }
+
+    if (params.method === 'online' && params.amountPaid > 0 && !params.verifiedOnline) {
+      return {
+        success: false,
+        error: 'Online payments cannot be marked as paid without verified payment confirmation.',
+      };
+    }
+
+    if (params.method === 'online' && params.amountPaid > 0 && !params.transactionReference?.trim()) {
+      return {
+        success: false,
+        error: 'Please enter the verified online transaction reference ID before recording an online payment.',
+      };
+    }
+
+    try {
+      const { data: reqRow, error: fetchErr } = await client
+        .from('service_requests')
+        .select('*')
+        .eq('id', requestId)
+        .maybeSingle();
+
+      if (fetchErr || !reqRow) {
+        return { success: false, error: 'Service request not found.' };
+      }
+
+      const req = mapSupabaseToServiceRequest(reqRow);
+
+      if (actor.role === 'technician' && req.assignedTechnicianId !== actor.id) {
+        return {
+          success: false,
+          error: 'Unauthorized: Technicians can only record payment details for their own assigned jobs.',
+        };
+      }
+
+      const currentSummary = this.computePaymentSummary(req);
+      const totalAmount =
+        params.totalAmount !== undefined && Number.isFinite(Number(params.totalAmount)) && Number(params.totalAmount) >= 0
+          ? Math.round(Number(params.totalAmount))
+          : currentSummary.totalAmount;
+
+      const amountPaid = Math.max(0, Math.round(Number(params.amountPaid) || 0));
+      if (amountPaid > totalAmount) {
+        return {
+          success: false,
+          error: `Amount paid (PKR ${amountPaid.toLocaleString()}) cannot exceed total service amount (PKR ${totalAmount.toLocaleString()}).`,
+        };
+      }
+
+      const remainingBalance = Math.max(0, totalAmount - amountPaid);
+      let status: PaymentStatus = 'unpaid';
+      if (amountPaid > 0 && remainingBalance === 0 && totalAmount > 0) {
+        status = 'paid';
+      } else if (amountPaid > 0 && remainingBalance > 0) {
+        status = 'partially_paid';
+      }
+
+      const nowIso = new Date().toISOString();
+      const paymentRecord: PaymentRecord = {
+        totalAmount,
+        amountPaid,
+        remainingBalance,
+        status,
+        method: amountPaid > 0 ? params.method : 'unrecorded',
+        transactionReference: params.transactionReference?.trim() || undefined,
+        verifiedByUserId: actor.id,
+        verifiedByName: actor.fullName,
+        verifiedByRole: actor.role,
+        updatedAt: nowIso,
+      };
+
+      const updatedAddressPayload = this.buildServiceAddressPayload(req, {
+        payment: paymentRecord,
+      });
+
+      const { data: updatedRows, error: updateErr } = await client
+        .from('service_requests')
+        .update({
+          service_address: updatedAddressPayload,
+          updated_at: nowIso,
+        })
+        .eq('id', req.id)
+        .select('*');
+
+      if (updateErr) {
+        return { success: false, error: updateErr.message };
+      }
+
+      const updatedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
+      if (!updatedRow) {
+        return {
+          success: false,
+          error: 'Failed to save payment record in Supabase.',
+        };
+      }
+
+      const updatedRequest = mapSupabaseToServiceRequest(updatedRow);
+
+      try {
+        store.updatePaymentRecord(requestId, params, actor);
+      } catch {
+        // Non-fatal local sync
+      }
+
+      const statusLabel =
+        status === 'paid' ? 'Paid' : status === 'partially_paid' ? 'Partially Paid' : 'Unpaid';
+      const methodLabel =
+        paymentRecord.method === 'cash'
+          ? 'Cash'
+          : paymentRecord.method === 'online'
+          ? `Online (Ref: ${paymentRecord.transactionReference})`
+          : 'Unrecorded';
+
+      try {
+        await client.from('service_request_logs').insert({
+          request_id: req.id,
+          from_status: req.status,
+          to_status: req.status,
+          changed_by_user_id: actor.id,
+          changed_by_name: actor.fullName,
+          changed_by_role: actor.role,
+          note: `Payment updated by ${actor.fullName} (${actor.role}): Status = ${statusLabel}, Paid = PKR ${amountPaid.toLocaleString()} / PKR ${totalAmount.toLocaleString()}, Balance = PKR ${remainingBalance.toLocaleString()}, Method = ${methodLabel}.`,
+        });
+      } catch {
+        // Non-fatal log
+      }
+
+      try {
+        await client.from('notifications').insert({
+          recipient_user_id: req.customerId,
+          title: `Payment Updated: ${req.ticketNumber}`,
+          message: `Payment record for ${req.ticketNumber}: ${statusLabel} (Paid: PKR ${amountPaid.toLocaleString()}, Remaining: PKR ${remainingBalance.toLocaleString()}, Method: ${
+            paymentRecord.method === 'cash' ? 'Cash' : paymentRecord.method === 'online' ? 'Online' : 'N/A'
+          }).`,
+          request_id: req.id,
+          type: 'status_change',
+        });
+      } catch {
+        // Non-fatal notification
+      }
+
+      return { success: true, request: updatedRequest };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to update payment record.' };
     }
   }
 

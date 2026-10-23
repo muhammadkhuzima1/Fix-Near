@@ -3,6 +3,7 @@ import { ServiceStatus } from '../../types';
 
 interface StatusBadgeProps {
   status: ServiceStatus;
+  size?: 'sm' | 'md';
   className?: string;
 }
 
