@@ -769,11 +769,11 @@ class FixNearStore {
     scheduledTimeSlot?: string;
   }[] {
     const requests = this.getRequests();
-    // Strictly dispatch ONLY manager-approved unassigned requests
-    const approvedQueue = requests.filter(
-      (r) => r.status === 'approved' && !r.assignedTechnicianId
+    // Dispatch unassigned requests in 'pending' or 'approved' status
+    const queue = requests.filter(
+      (r) => (r.status === 'pending' || r.status === 'approved') && !r.assignedTechnicianId
     );
-    if (!approvedQueue.length) return [];
+    if (!queue.length) return [];
 
     // Prioritize Urgent (emergency, high) ahead of Normal (medium, low)
     const priorityRank: Record<PriorityLevel, number> = {
@@ -782,7 +782,7 @@ class FixNearStore {
       medium: 2,
       low: 1,
     };
-    approvedQueue.sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority]);
+    queue.sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority]);
 
     const techProfiles = this.getTechnicianProfiles();
     const technicians = this.getUsers().filter((u) => u.role === 'technician');
@@ -804,7 +804,7 @@ class FixNearStore {
       return a.startHour < b.endHour && b.startHour < a.endHour;
     };
 
-    for (const req of approvedQueue) {
+    for (const req of queue) {
       let bestTech: User | null = null;
       let bestProf: TechnicianProfile | null = null;
       let bestScore = -999;
@@ -875,9 +875,9 @@ class FixNearStore {
           chosenSlot = parsedReqSlot.canonical;
           score += 25;
         } else {
+          const [baseY, baseM, baseD] = baseDate.split('-').map(Number);
           for (let offset = 0; offset < 14 && !chosenDate; offset++) {
-            const dObj = new Date(baseDate + 'T00:00:00');
-            dObj.setDate(dObj.getDate() + offset);
+            const dObj = new Date(Date.UTC(baseY, (baseM || 1) - 1, (baseD || 1) + offset));
             const candidateDate = dObj.toISOString().split('T')[0];
             for (const slotOption of workingSlots) {
               if (!isSlotInPast(candidateDate, slotOption) && !hasConflict(candidateDate, slotOption)) {
@@ -904,6 +904,7 @@ class FixNearStore {
       }
 
       if (bestTech && bestProf) {
+        const prevStatus = req.status;
         req.status = 'assigned';
         req.assignedTechnicianId = bestTech.id;
         req.assignedTechnicianName = bestTech.fullName;
@@ -915,18 +916,18 @@ class FixNearStore {
 
         this.addLog({
           requestId: req.id,
-          fromStatus: 'approved',
+          fromStatus: prevStatus,
           toStatus: 'assigned',
           changedByUserId: bestTech.id,
           changedByName: 'AI Auto-Dispatch Engine',
           changedByRole: 'manager',
-          note: `AI Dispatch: Assigned approved ticket to ${bestTech.fullName} (${bestProf.specialty}) scheduled for ${bestDate} (${bestSlot}).`,
+          note: `AI Dispatch: Assigned ticket to ${bestTech.fullName} (${bestProf.specialty}) scheduled for ${bestDate} (${bestSlot}).`,
         });
 
         this.addNotification({
           recipientUserId: bestTech.id,
           title: `New Job Dispatched: ${req.ticketNumber}`,
-          message: `Approved ${req.category} ticket "${req.title}" assigned to you for ${bestDate} (${bestSlot}).`,
+          message: `${req.category} ticket "${req.title}" assigned to you for ${bestDate} (${bestSlot}).`,
           requestId: req.id,
           type: 'assignment',
         });
@@ -946,6 +947,13 @@ class FixNearStore {
           techName: bestTech.fullName,
           scheduledDate: bestDate,
           scheduledTimeSlot: bestSlot,
+        });
+      } else {
+        req.status = 'pending';
+        results.push({
+          assigned: false,
+          requestId: req.id,
+          ticketNumber: req.ticketNumber,
         });
       }
     }
@@ -1509,8 +1517,8 @@ class FixNearStore {
     if (index === -1) return { success: false, error: 'Request not found.' };
 
     const req = requests[index];
-    if (req.status !== 'approved' && req.status !== 'assigned') {
-      return { success: false, error: `Request must be Approved before assigning a technician (currently ${req.status}).` };
+    if (req.status !== 'pending' && req.status !== 'approved' && req.status !== 'assigned') {
+      return { success: false, error: `Request cannot be assigned from ${req.status} status.` };
     }
 
     const targetDate = schedule?.preferredDate || req.preferredDate;

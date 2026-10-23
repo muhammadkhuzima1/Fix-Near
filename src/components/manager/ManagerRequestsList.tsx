@@ -47,12 +47,12 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
     .filter((req) => {
       const q = searchQuery.toLowerCase();
       const matchesSearch =
-        req.title.toLowerCase().includes(q) ||
-        req.ticketNumber.toLowerCase().includes(q) ||
-        req.customerName.toLowerCase().includes(q) ||
+        (req.title || '').toLowerCase().includes(q) ||
+        (req.ticketNumber || '').toLowerCase().includes(q) ||
+        (req.customerName || '').toLowerCase().includes(q) ||
         (req.assignedTechnicianName &&
           req.assignedTechnicianName.toLowerCase().includes(q)) ||
-        req.serviceAddress.city.toLowerCase().includes(q);
+        (req.serviceAddress?.city || '').toLowerCase().includes(q);
 
       const matchesStatus = statusFilter === 'all' || req.status === statusFilter;
       const matchesPriority =
@@ -271,20 +271,20 @@ export const ManagerRequestsList: React.FC<ManagerRequestsListProps> = ({
                             </button>
                           )}
 
-                          {req.status === 'approved' &&
+                          {(req.status === 'pending' || req.status === 'approved') &&
                             !req.assignedTechnicianId &&
                             onQuickAIDispatch && (
                               <button
                                 onClick={(e) => onQuickAIDispatch(req, e)}
                                 disabled={dispatchingId === req.id}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white cursor-pointer"
                               >
                                 {dispatchingId === req.id ? (
                                   <Loader2 className="w-3 h-3 animate-spin" />
                                 ) : (
                                   <Sparkles className="w-3 h-3 text-amber-300" />
                                 )}
-                                Dispatch
+                                AI Dispatch
                               </button>
                             )}
 

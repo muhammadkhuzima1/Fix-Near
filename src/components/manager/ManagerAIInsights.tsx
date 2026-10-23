@@ -60,20 +60,31 @@ export const ManagerAIInsights: React.FC<ManagerAIInsightsProps> = ({
     setDispatching(true);
     try {
       const results = await SupabaseService.autoAssignPendingRequests();
-      if (results.length > 0) {
-        showToast(`AI Auto-Dispatch Engine assigned ${results.length} pending ticket(s)!`, 'success');
+      const assignedList = results.filter((r) => r.assigned);
+      const keptPendingCount = results.filter((r) => !r.assigned).length;
+
+      if (assignedList.length > 0) {
+        const suffix = keptPendingCount > 0 ? ` (${keptPendingCount} kept pending)` : '';
+        showToast(
+          `AI Auto-Dispatch Engine assigned ${assignedList.length} ticket(s)${suffix}!`,
+          'success'
+        );
         if (onRefreshData) onRefreshData();
         fetchInsights();
       } else {
-        const pendingCount = requests.filter((r) => r.status === 'pending').length;
-        if (pendingCount === 0) {
-          showToast('No pending tickets in queue. All work orders are active or completed!', 'info');
+        const unassignedQueueCount = requests.filter(
+          (r) => (r.status === 'pending' || r.status === 'approved') && !r.assignedTechnicianId
+        ).length;
+        if (unassignedQueueCount === 0) {
+          showToast('No unassigned tickets in queue. All work orders are active or completed!', 'info');
         } else {
           showToast(
-            `Checked queue: No available technicians with matching skills currently open for ${pendingCount} pending ticket(s).`,
+            `No available technicians with matching skills currently open. ${unassignedQueueCount} ticket(s) kept pending.`,
             'info'
           );
         }
+        if (onRefreshData) onRefreshData();
+        fetchInsights();
       }
     } catch (err: any) {
       showToast(err.message || 'Auto-dispatch check failed.', 'error');
@@ -82,7 +93,9 @@ export const ManagerAIInsights: React.FC<ManagerAIInsightsProps> = ({
     }
   };
 
-  const pendingCount = requests.filter((r) => r.status === 'pending').length;
+  const pendingCount = requests.filter(
+    (r) => (r.status === 'pending' || r.status === 'approved') && !r.assignedTechnicianId
+  ).length;
   const availableCount = technicianProfiles.filter((p) => p.status === 'available').length;
 
   return (

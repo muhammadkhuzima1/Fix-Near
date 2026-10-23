@@ -121,26 +121,20 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
       if (rates) setCategoryRates(rates);
 
       if (request.status === 'approved' || request.status === 'pending') {
-        const evalRes = await SupabaseService.evaluateEligibleTechnicians({
-          category: request.category,
-          priority: request.priority,
-          preferredDate: request.preferredDate,
-          preferredTimeSlot: request.preferredTimeSlot,
-          description: request.description,
-          title: request.title,
-          excludeRequestId: request.id,
-        });
+        const previewRes = await SupabaseService.previewAIDispatch(request.id);
         if (!isMounted) return;
-        setAiCandidates(evalRes.allCandidates);
-        if (evalRes.bestCandidate) {
+        setAiCandidates(previewRes.allCandidates);
+        if (previewRes.candidate) {
           setAiDispatchError('');
           if (!request.assignedTechnicianId) {
-            setSelectedTechId(evalRes.bestCandidate.technician.id);
-            setScheduleDate(evalRes.bestCandidate.scheduledDate);
-            setScheduleTimeSlot(evalRes.bestCandidate.scheduledTimeSlot);
+            setSelectedTechId(previewRes.candidate.technician.id);
+            setScheduleDate(previewRes.candidate.scheduledDate);
+            setScheduleTimeSlot(previewRes.candidate.scheduledTimeSlot);
           }
         } else {
-          setAiDispatchError(evalRes.diagnosticReason);
+          setAiDispatchError(
+            previewRes.error || 'No suitable available technician found. Request remains pending.'
+          );
         }
       }
       setIsLoadingAI(false);
@@ -151,7 +145,8 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
     };
   }, [request]);
 
-  const getTechProfile = (userId: string) => techProfiles.find((p) => p.userId === userId);
+  const getTechProfile = (userId: string) =>
+    techProfiles.find((p) => p.userId === userId || p.id === userId);
   const getActiveJobCount = (techId: string) =>
     allRequests.filter(
       (r) =>
@@ -185,8 +180,8 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
   const handleConfirmAIDispatch = async () => {
     setError('');
     setAiDispatchSuccess('');
-    if (request.status !== 'approved') {
-      setError('Approve this request first before running AI Dispatch.');
+    if (request.status !== 'pending' && request.status !== 'approved') {
+      setError('This request has already been dispatched or closed.');
       return;
     }
 
@@ -359,56 +354,58 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                 </div>
               )}
 
-              {(request.status === 'approved' ||
+              {(request.status === 'pending' ||
+                request.status === 'approved' ||
                 request.status === 'assigned' ||
                 request.status === 'accepted') && (
                 <div className="space-y-3">
                   {/* AI Dispatch Recommendation */}
-                  {request.status === 'approved' && (
-                    <div className="bg-white rounded-xl p-3.5 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#143628]">
-                          <Sparkles className="w-4 h-4 text-amber-500" />
-                          <span>AI Dispatch Recommendation</span>
+                  {(request.status === 'pending' || request.status === 'approved') &&
+                    !request.assignedTechnicianId && (
+                      <div className="bg-white rounded-xl p-3.5 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-[#143628]">
+                            <Sparkles className="w-4 h-4 text-amber-500" />
+                            <span>AI Dispatch Recommendation</span>
+                          </div>
+                          {isLoadingAI ? (
+                            <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Analyzing issue, required skills & technician availability...
+                            </p>
+                          ) : bestCandidate ? (
+                            <p className="text-xs text-[#5C5852] mt-1">
+                              Best Match: <strong className="text-[#18181B]">{bestCandidate.technician.fullName}</strong> ({bestCandidate.profile.specialty}) · {bestCandidate.scheduledDate} · {bestCandidate.scheduledTimeSlot}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-amber-800 mt-1">
+                              {aiDispatchError || 'No suitable available specialist found. Request will remain pending.'}
+                            </p>
+                          )}
                         </div>
-                        {isLoadingAI ? (
-                          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Checking skill match & schedule availability...
-                          </p>
-                        ) : bestCandidate ? (
-                          <p className="text-xs text-[#5C5852] mt-1">
-                            Best Match: <strong className="text-[#18181B]">{bestCandidate.technician.fullName}</strong> ({bestCandidate.profile.specialty}) · {bestCandidate.scheduledDate} · {bestCandidate.scheduledTimeSlot}
-                          </p>
-                        ) : (
-                          <p className="text-xs text-amber-800 mt-1">
-                            {aiDispatchError || 'No available specialist found.'}
-                          </p>
+
+                        {bestCandidate && (
+                          <button
+                            type="button"
+                            onClick={handleConfirmAIDispatch}
+                            disabled={isDispatchingAI || isSubmitting}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0 cursor-pointer"
+                          >
+                            {isDispatchingAI ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                Dispatching...
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                Confirm AI Dispatch
+                              </>
+                            )}
+                          </button>
                         )}
                       </div>
-
-                      {bestCandidate && (
-                        <button
-                          type="button"
-                          onClick={handleConfirmAIDispatch}
-                          disabled={isDispatchingAI || isSubmitting}
-                          className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0"
-                        >
-                          {isDispatchingAI ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              Dispatching...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                              Confirm AI Dispatch
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    )}
 
                   {/* Manual Assignment / Schedule Override */}
                   <form onSubmit={handleAssignManual} className="space-y-3">

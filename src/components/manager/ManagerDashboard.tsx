@@ -77,6 +77,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   const currentUser = propUser || authUser;
 
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
+  const [localRequests, setLocalRequests] = useState<ServiceRequest[]>(requests || []);
   const [technicians, setTechnicians] = useState<User[]>(propTechnicians || []);
   const [techProfiles, setTechProfiles] = useState<TechnicianProfile[]>(propTechProfiles || []);
   const [isAutoDispatching, setIsAutoDispatching] = useState(false);
@@ -107,14 +108,45 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   } | null>(null);
 
   useEffect(() => {
+    if (Array.isArray(requests) && requests.length > 0) {
+      setLocalRequests(requests);
+    }
+  }, [requests]);
+
+  const reloadManagerData = async () => {
+    const [fetchedRequests, techs, profiles, fetchedRates] = await Promise.all([
+      SupabaseService.fetchServiceRequests(),
+      SupabaseService.fetchTechnicians(),
+      SupabaseService.fetchTechnicianProfiles(),
+      SupabaseService.fetchServiceCategoryRates(),
+    ]);
+    setLocalRequests(fetchedRequests);
+    setTechnicians(techs);
+    setTechProfiles(profiles);
+    if (fetchedRates) {
+      setCategoryRates(fetchedRates);
+      setEditingRates({
+        plumbing: String(fetchedRates.plumbing),
+        electrical: String(fetchedRates.electrical),
+        hvac: String(fetchedRates.hvac),
+        appliance: String(fetchedRates.appliance),
+        carpentry: String(fetchedRates.carpentry),
+        general: String(fetchedRates.general),
+      });
+    }
+  };
+
+  useEffect(() => {
     let isMounted = true;
     const loadManagerData = async () => {
-      const [techs, profiles, fetchedRates] = await Promise.all([
+      const [fetchedRequests, techs, profiles, fetchedRates] = await Promise.all([
+        SupabaseService.fetchServiceRequests(),
         SupabaseService.fetchTechnicians(),
         SupabaseService.fetchTechnicianProfiles(),
         SupabaseService.fetchServiceCategoryRates(),
       ]);
       if (isMounted) {
+        setLocalRequests(fetchedRequests);
         setTechnicians(techs);
         setTechProfiles(profiles);
         if (fetchedRates) {
@@ -134,7 +166,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [requests, activeTab]);
+  }, [requests.length, activeTab, currentUser?.id]);
+
+  const effectiveRequests =
+    localRequests.length >= requests.length ? localRequests : requests;
 
   const handleSaveServicePrices = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -187,27 +222,29 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     low: 1,
   };
 
-  const pendingApprovalRequests = requests
-    .filter((r) => r.status === 'pending')
+  const pendingApprovalRequests = effectiveRequests
+    .filter((r) => r.status === 'pending' && !r.assignedTechnicianId)
     .sort((a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0));
 
-  const approvedUnassignedRequests = requests
+  const approvedUnassignedRequests = effectiveRequests
     .filter((r) => r.status === 'approved' && !r.assignedTechnicianId)
     .sort((a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0));
 
-  const queueRequests = [...approvedUnassignedRequests, ...pendingApprovalRequests];
+  const queueRequests = [...approvedUnassignedRequests, ...pendingApprovalRequests].sort(
+    (a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0)
+  );
 
-  const activeJobs = requests.filter((r) =>
+  const activeJobs = effectiveRequests.filter((r) =>
     ['assigned', 'accepted', 'in_progress'].includes(r.status)
   );
-  const completedRequests = requests.filter((r) => r.status === 'completed');
-  const urgentActiveRequests = requests.filter(
+  const completedRequests = effectiveRequests.filter((r) => r.status === 'completed');
+  const urgentActiveRequests = effectiveRequests.filter(
     (r) =>
       isUrgentPriority(r.priority) &&
       r.status !== 'completed' &&
       r.status !== 'cancelled'
   );
-  const pendingReschedules = requests.filter(
+  const pendingReschedules = effectiveRequests.filter(
     (r) => r.rescheduleRequest?.status === 'pending'
   );
 
@@ -216,7 +253,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   const handleApproveAction = async (req: ServiceRequest, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (onQuickApprove) {
-      onQuickApprove(req);
+      await onQuickApprove(req);
+      await reloadManagerData();
       return;
     }
     if (!currentUser) return;
@@ -233,13 +271,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       type: 'success',
       text: `${req.ticketNumber} approved. Ready for AI Dispatch.`,
     });
+    await reloadManagerData();
     onRefresh?.();
   };
 
   const handleDispatchAction = async (req: ServiceRequest, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (onQuickAIDispatch) {
-      onQuickAIDispatch(req);
+      await onQuickAIDispatch(req);
+      await reloadManagerData();
       return;
     }
     if (!currentUser || singleDispatchingId || isAutoDispatching) return;
@@ -250,6 +290,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     try {
       const res = await SupabaseService.aiDispatchServiceRequest(req.id, currentUser);
       if (res.assigned) {
+        const tech = technicians.find((t) => t.id === res.technicianId);
+        if (tech) {
+          TriggerService.triggerTechnicianAssigned(
+            res.request || req,
+            { id: tech.id, fullName: tech.fullName, email: tech.email, phone: tech.phone },
+            { fullName: req.customerName, email: req.customerEmail, phone: req.customerPhone }
+          );
+        }
         setAutoDispatchBanner({
           type: 'success',
           text: `Dispatched ${res.ticketNumber} to ${res.technicianName} (${res.matchedSkill}) for ${res.scheduledDate} · ${res.scheduledTimeSlot}.`,
@@ -257,9 +305,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       } else {
         setAutoDispatchBanner({
           type: 'info',
-          text: res.error || res.reason || `Could not dispatch ${req.ticketNumber}.`,
+          text: res.error || res.reason || `No suitable available technician for ${req.ticketNumber}. Request remains pending.`,
         });
       }
+      await reloadManagerData();
       onRefresh?.();
     } catch (err: any) {
       setAutoDispatchBanner({
@@ -272,13 +321,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   };
 
   const handleRunAutoDispatch = async () => {
-    if (approvedUnassignedRequests.length === 0) {
+    if (queueRequests.length === 0) {
       setAutoDispatchBanner({
         type: 'info',
-        text:
-          pendingApprovalRequests.length > 0
-            ? `Approve pending requests first (${pendingApprovalRequests.length} awaiting approval) before running AI Auto-Dispatch.`
-            : 'No approved unassigned requests in the queue.',
+        text: 'No unassigned pending or approved service requests in the queue.',
       });
       return;
     }
@@ -288,13 +334,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     try {
       const results = await SupabaseService.autoAssignPendingRequests(currentUser || undefined);
       const assignedList = results.filter((r) => r.assigned);
+      const unassignedList = results.filter((r) => !r.assigned);
 
       for (const r of assignedList) {
-        const req = requests.find((item) => item.id === r.requestId);
+        const req = effectiveRequests.find((item) => item.id === r.requestId);
         const tech = technicians.find((t) => t.id === r.technicianId);
         if (req && tech) {
           TriggerService.triggerTechnicianAssigned(
-            req,
+            r.request || req,
             { id: tech.id, fullName: tech.fullName, email: tech.email, phone: tech.phone },
             { fullName: req.customerName, email: req.customerEmail, phone: req.customerPhone }
           );
@@ -305,9 +352,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         const summary = assignedList
           .map((a) => `${a.ticketNumber} → ${a.technicianName} (${a.scheduledDate} · ${a.scheduledTimeSlot})`)
           .join('; ');
+        const pendingNotice =
+          unassignedList.length > 0
+            ? ` (${unassignedList.length} request(s) kept pending: ${unassignedList[0]?.reason || 'no suitable technician available'})`
+            : '';
         setAutoDispatchBanner({
           type: 'success',
-          text: `AI Auto-Dispatch assigned ${assignedList.length} request(s): ${summary}`,
+          text: `AI Auto-Dispatch assigned ${assignedList.length} request(s): ${summary}${pendingNotice}`,
         });
       } else {
         const firstReason = results[0]?.error || results[0]?.reason;
@@ -315,9 +366,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           type: 'info',
           text:
             firstReason ||
-            'No available technicians with matching skills and conflict-free working hours found.',
+            'No available technicians with matching skills and conflict-free working hours found. Request(s) remain pending.',
         });
       }
+      await reloadManagerData();
       onRefresh?.();
     } catch {
       setAutoDispatchBanner({
@@ -338,7 +390,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   };
 
   const activeSelectedRequest = selectedRequest
-    ? requests.find((r) => r.id === selectedRequest.id) || null
+    ? effectiveRequests.find((r) => r.id === selectedRequest.id) || null
     : null;
 
   return (
@@ -379,7 +431,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             ) : (
               <>
                 <Sparkles className="w-4 h-4 text-amber-500" />
-                AI Auto-Dispatch ({approvedUnassignedRequests.length})
+                AI Auto-Dispatch ({queueRequests.length})
               </>
             )}
           </button>
@@ -413,7 +465,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 <span className="text-xs font-medium text-[#5C5852]">Total</span>
                 <ClipboardList className="w-4 h-4 text-[#143628]" />
               </div>
-              <p className="text-2xl font-bold text-[#18181B] mt-1">{requests.length}</p>
+              <p className="text-2xl font-bold text-[#18181B] mt-1">{effectiveRequests.length}</p>
             </div>
 
             <div className="bg-white rounded-xl p-4 border border-[#E6E1D6]">
@@ -608,12 +660,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   <CheckCircle2 className="w-7 h-7 text-emerald-500 mx-auto mb-1.5" />
                   <p className="text-xs font-bold text-[#18181B]">Queue Clear</p>
                   <p className="text-xs text-[#5C5852] mt-0.5">
-                    All incoming requests have been approved and dispatched.
+                    All incoming requests have been dispatched.
                   </p>
                 </div>
               ) : (
                 <div className="divide-y divide-[#E6E1D6]">
-                  {queueRequests.slice(0, 8).map((req) => {
+                  {queueRequests.map((req) => {
                     const payment = SupabaseService.computePaymentSummary(req);
                     return (
                       <div
@@ -667,20 +719,21 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             </button>
                           )}
 
-                          {req.status === 'approved' && !req.assignedTechnicianId && (
-                            <button
-                              onClick={(e) => handleDispatchAction(req, e)}
-                              disabled={singleDispatchingId === req.id}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white cursor-pointer"
-                            >
-                              {singleDispatchingId === req.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                              )}
-                              AI Dispatch
-                            </button>
-                          )}
+                          {(req.status === 'pending' || req.status === 'approved') &&
+                            !req.assignedTechnicianId && (
+                              <button
+                                onClick={(e) => handleDispatchAction(req, e)}
+                                disabled={singleDispatchingId === req.id}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white cursor-pointer"
+                              >
+                                {singleDispatchingId === req.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                )}
+                                AI Dispatch
+                              </button>
+                            )}
 
                           <button
                             onClick={() => handleRequestSelect(req)}
@@ -719,8 +772,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               ) : (
                 <div className="divide-y divide-[#E6E1D6]">
                   {technicians.map((tech) => {
-                    const prof = techProfiles.find((p) => p.userId === tech.id);
-                    const activeCount = requests.filter(
+                    const prof = techProfiles.find((p) => p.userId === tech.id || p.id === tech.id);
+                    const activeCount = effectiveRequests.filter(
                       (r) =>
                         r.assignedTechnicianId === tech.id &&
                         ['assigned', 'accepted', 'in_progress'].includes(r.status)
@@ -765,12 +818,44 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               )}
             </div>
           </div>
+
+          {/* All Customer Service Requests Table on Manager Dashboard */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-[#18181B]">
+                  All Customer Service Requests ({effectiveRequests.length})
+                </h2>
+                <p className="text-xs text-[#5C5852]">
+                  Complete live directory of customer requests from Supabase
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  await reloadManagerData();
+                  onRefresh?.();
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E6E1D6] bg-white hover:bg-[#FAF8F5] text-xs font-semibold text-[#143628] cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Refresh Requests
+              </button>
+            </div>
+            <ManagerRequestsList
+              requests={effectiveRequests}
+              onSelectRequest={(req) => handleRequestSelect(req)}
+              onQuickApprove={handleApproveAction}
+              onQuickAIDispatch={handleDispatchAction}
+              dispatchingId={singleDispatchingId}
+            />
+          </div>
         </>
       )}
 
       {activeTab === 'requests' && (
         <ManagerRequestsList
-          requests={requests}
+          requests={effectiveRequests}
           onSelectRequest={(req) => handleRequestSelect(req)}
           onQuickApprove={handleApproveAction}
           onQuickAIDispatch={handleDispatchAction}
@@ -780,9 +865,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
       {activeTab === 'ai-insights' && (
         <ManagerAIInsights
-          requests={requests}
+          requests={effectiveRequests}
           technicians={technicians}
           technicianProfiles={techProfiles}
+          onRefreshData={async () => {
+            await reloadManagerData();
+            onRefresh?.();
+          }}
         />
       )}
 
@@ -790,9 +879,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         <ManagerTechniciansList
           technicians={technicians}
           technicianProfiles={techProfiles}
-          requests={requests}
+          requests={effectiveRequests}
           onOpenCreateTech={() => onOpenCreateTech?.()}
-          onRefresh={() => onRefresh?.()}
+          onRefresh={async () => {
+            await reloadManagerData();
+            onRefresh?.();
+          }}
         />
       )}
 
@@ -803,7 +895,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           request={activeSelectedRequest}
           currentUser={currentUser}
           onClose={() => setSelectedRequest(null)}
-          onUpdated={() => onRefresh?.()}
+          onUpdated={async () => {
+            await reloadManagerData();
+            onRefresh?.();
+          }}
         />
       )}
     </div>

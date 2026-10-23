@@ -112,15 +112,17 @@ function MainApp() {
         setNotifications(store.getNotifications(currentUser.id));
       }
     }
-  }, [isSupabaseActive, currentUser?.id]);
+  }, [isSupabaseActive, currentUser?.id, role]);
 
   useEffect(() => {
-    refreshData();
+    if (!authLoading) {
+      refreshData();
+    }
     const unsubscribe = store.subscribe(() => {
       refreshData();
     });
     return unsubscribe;
-  }, [refreshData]);
+  }, [refreshData, authLoading]);
 
   // Realtime subscription for Supabase
   useEffect(() => {
@@ -256,8 +258,8 @@ function MainApp() {
   };
 
   const handleQuickAIDispatch = async (req: ServiceRequest) => {
-    if (req.status !== 'approved') {
-      showToast('Only manager-approved requests can be dispatched.', 'error');
+    if (req.status !== 'pending' && req.status !== 'approved') {
+      showToast('Only pending or approved unassigned requests can be dispatched.', 'error');
       return;
     }
 
@@ -271,9 +273,10 @@ function MainApp() {
       await refreshData();
       setSelectedRequest(result.request);
     } else {
+      await refreshData();
       showToast(
-        result.error || result.reason || 'No suitable available technician could be assigned.',
-        'error'
+        result.reason || result.error || 'No suitable available technician found. Request kept pending.',
+        'info'
       );
     }
   };
@@ -403,11 +406,13 @@ function MainApp() {
                 technicians={technicians}
                 customers={customers}
                 technicianProfiles={technicianProfiles}
+                currentUser={currentUser}
                 onSelectRequest={(req) => setSelectedRequest(req)}
                 onNavigateTab={(tab) => setCurrentTab(tab)}
                 onOpenCreateTech={() => setIsCreateTechOpen(true)}
                 onQuickApprove={handleQuickApprove}
                 onQuickAIDispatch={handleQuickAIDispatch}
+                onRefresh={refreshData}
               />
             )}
 

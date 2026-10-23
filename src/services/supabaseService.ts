@@ -25,6 +25,7 @@ import {
   PaymentStatus,
 } from '../types';
 import { store } from './store';
+import { AIService } from './aiService';
 import {
   DEFAULT_CATEGORY_RATES,
   WORKING_TIME_SLOTS as STANDARD_WORKING_SLOTS,
@@ -133,25 +134,78 @@ export function mapSupabaseToServiceRequest(row: any): ServiceRequest {
     }
   }
 
+  const rawStatus = String(row.status || 'pending')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  const validStatuses: ServiceStatus[] = [
+    'pending',
+    'approved',
+    'assigned',
+    'accepted',
+    'in_progress',
+    'completed',
+    'cancelled',
+  ];
+  const normalizedStatus: ServiceStatus = validStatuses.includes(rawStatus as ServiceStatus)
+    ? (rawStatus as ServiceStatus)
+    : 'pending';
+
+  const rawPriority = String(row.priority || 'medium')
+    .trim()
+    .toLowerCase();
+  let normalizedPriority: PriorityLevel = 'medium';
+  if (rawPriority === 'emergency' || rawPriority === 'critical') {
+    normalizedPriority = 'emergency';
+  } else if (rawPriority === 'high' || rawPriority === 'urgent') {
+    normalizedPriority = 'high';
+  } else if (rawPriority === 'low') {
+    normalizedPriority = 'low';
+  } else {
+    normalizedPriority = 'medium';
+  }
+
+  const rawCategory = String(row.category || 'general')
+    .trim()
+    .toLowerCase();
+  const validCategories: ServiceCategory[] = [
+    'plumbing',
+    'electrical',
+    'hvac',
+    'appliance',
+    'carpentry',
+    'general',
+  ];
+  const normalizedCategory: ServiceCategory = validCategories.includes(rawCategory as ServiceCategory)
+    ? (rawCategory as ServiceCategory)
+    : mapSpecialtyToCategory(rawCategory);
+
+  const customerRel = row.customer && typeof row.customer === 'object' ? row.customer : null;
+  const techRel = row.technician && typeof row.technician === 'object' ? row.technician : null;
+
   return {
     id: row.id,
     ticketNumber: row.ticket_number || `FXN-${String(row.id || '').slice(0, 8) || '0000'}`,
-    customerId: row.customer_id,
-    customerName: row.customer_name || 'Customer',
-    customerPhone: row.customer_phone || '',
-    customerEmail: row.customer_email || '',
+    customerId: row.customer_id || customerRel?.id || '',
+    customerName:
+      row.customer_name ||
+      customerRel?.full_name ||
+      customerRel?.email ||
+      'Customer',
+    customerPhone: row.customer_phone || customerRel?.phone || parsedAddress.contactPhone || '',
+    customerEmail: row.customer_email || customerRel?.email || '',
     title: row.title || 'Service Request',
-    category: (row.category || 'general') as ServiceCategory,
+    category: normalizedCategory,
     description: row.description || '',
-    priority: (row.priority || 'medium') as PriorityLevel,
-    status: (row.status || 'pending') as ServiceStatus,
+    priority: normalizedPriority,
+    status: normalizedStatus,
     serviceAddress: parsedAddress,
     preferredDate: row.preferred_date || new Date().toISOString().split('T')[0],
     preferredTimeSlot: row.preferred_time_slot || '09:00 AM – 11:00 AM',
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
-    assignedTechnicianId: row.assigned_technician_id || undefined,
-    assignedTechnicianName: row.assigned_technician_name || undefined,
-    assignedTechnicianPhone: row.assigned_technician_phone || undefined,
+    assignedTechnicianId: row.assigned_technician_id || techRel?.id || undefined,
+    assignedTechnicianName: row.assigned_technician_name || techRel?.full_name || undefined,
+    assignedTechnicianPhone: row.assigned_technician_phone || techRel?.phone || undefined,
     assignedAt: row.assigned_at || undefined,
     acceptedAt: row.accepted_at || undefined,
     startedAt: row.started_at || undefined,
@@ -250,8 +304,46 @@ export class SupabaseService {
         return null;
       }
 
+      // Ensure public.profiles row ID is synchronized with auth.uid() (userId) so Supabase RLS
+      // policies (e.g., EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'manager'))
+      // always match for the authenticated session.
+      let effectiveId = data.id;
+      if (userId && data.id !== userId) {
+        try {
+          const { error: updateIdErr } = await client
+            .from('profiles')
+            .update({
+              id: userId,
+              role: normalizedRole,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', data.id);
+
+          if (!updateIdErr) {
+            effectiveId = userId;
+          } else {
+            const { error: upsertErr } = await client.from('profiles').upsert(
+              {
+                id: userId,
+                email: data.email || userEmail?.trim().toLowerCase() || '',
+                full_name: data.full_name || data.email || 'User',
+                phone: data.phone || '',
+                role: normalizedRole,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'id' }
+            );
+            if (!upsertErr) {
+              effectiveId = userId;
+            }
+          }
+        } catch {
+          // Non-fatal profile ID sync
+        }
+      }
+
       return {
-        id: data.id,
+        id: effectiveId,
         email: data.email,
         fullName: data.full_name || data.email,
         role: normalizedRole as UserRole,
@@ -853,10 +945,10 @@ export class SupabaseService {
       };
     }
 
-    // 2. Search next available conflict-free working-hours slot (8:00 AM – 5:00 PM) across the next 14 days
-    const baseDateObj = new Date(baseDate + 'T00:00:00');
+    // 2. Search next available conflict-free working-hours slot (9:00 AM – 6:00 PM) across the next 14 days
+    const [baseY, baseM, baseD] = baseDate.split('-').map(Number);
     for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
-      const d = new Date(baseDateObj.getTime() + dayOffset * 86400000);
+      const d = new Date(Date.UTC(baseY, (baseM || 1) - 1, (baseD || 1) + dayOffset));
       const candidateDate = d.toISOString().split('T')[0];
 
       if (countTechJobsOnDate(candidateDate) >= 3) {
@@ -895,17 +987,85 @@ export class SupabaseService {
     }
 
     try {
-      const { data, error } = await client
+      let { data, error } = await client
         .from('service_requests')
         .select('*')
         .order('created_at', { ascending: false });
+
+      // Fallback if ordering column differs
+      if (error) {
+        const fallbackQuery = await client.from('service_requests').select('*');
+        data = fallbackQuery.data;
+        error = fallbackQuery.error;
+      }
 
       if (error) {
         console.error('Error fetching service requests from Supabase:', error);
         return [];
       }
 
-      return (data || []).map(mapSupabaseToServiceRequest);
+      const rows = data || [];
+      if (rows.length === 0) {
+        return [];
+      }
+
+      // Enrich customer & assigned technician relationships from public.profiles when available
+      const profileMap = new Map<
+        string,
+        { fullName: string; email: string; phone: string; role: string }
+      >();
+      try {
+        const { data: profilesData } = await client
+          .from('profiles')
+          .select('id, full_name, email, phone, role');
+        if (Array.isArray(profilesData)) {
+          for (const p of profilesData) {
+            if (p?.id) {
+              profileMap.set(p.id, {
+                fullName: p.full_name || p.email || 'User',
+                email: p.email || '',
+                phone: p.phone || '',
+                role: String(p.role || '').toLowerCase(),
+              });
+            }
+          }
+        }
+      } catch {
+        // Non-fatal profile enrichment
+      }
+
+      const mapped = rows.map((row: any) => {
+        const req = mapSupabaseToServiceRequest(row);
+        if (req.customerId && profileMap.has(req.customerId)) {
+          const cust = profileMap.get(req.customerId)!;
+          if (!req.customerName || req.customerName === 'Customer') {
+            req.customerName = cust.fullName;
+          }
+          if (!req.customerEmail && cust.email) {
+            req.customerEmail = cust.email;
+          }
+          if (!req.customerPhone && cust.phone) {
+            req.customerPhone = cust.phone;
+          }
+        }
+        if (req.assignedTechnicianId && profileMap.has(req.assignedTechnicianId)) {
+          const tech = profileMap.get(req.assignedTechnicianId)!;
+          if (!req.assignedTechnicianName) {
+            req.assignedTechnicianName = tech.fullName;
+          }
+          if (!req.assignedTechnicianPhone && tech.phone) {
+            req.assignedTechnicianPhone = tech.phone;
+          }
+        }
+        return req;
+      });
+
+      // Sort by createdAt descending so newest customer requests appear reliably
+      mapped.sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+
+      return mapped;
     } catch (e) {
       console.error('Exception fetching service requests from Supabase:', e);
       return [];
@@ -1059,6 +1219,7 @@ export class SupabaseService {
       }
 
       const specialtyLower = (prof.specialty || '').toLowerCase();
+      const mappedSpecialtyCategory = mapSpecialtyToCategory(prof.specialty);
       const additionalSkills = (prof.additionalSkills || []).map((s) => s.toLowerCase());
 
       let skillScore = 0;
@@ -1066,10 +1227,12 @@ export class SupabaseService {
 
       // 1. Direct or Synonym Specialty Match
       if (
+        mappedSpecialtyCategory === params.category ||
         specialtyLower === categoryLower ||
         specialtyLower.includes(categoryLower) ||
         categoryLower.includes(specialtyLower) ||
-        targetKeywords.some((kw) => kw.length > 2 && specialtyLower.includes(kw))
+        targetKeywords.some((kw) => kw.length > 2 && specialtyLower.includes(kw)) ||
+        (skillLower && (specialtyLower.includes(skillLower) || skillLower.includes(specialtyLower)))
       ) {
         skillScore += 100;
         reasons.push(`Primary specialty match (${prof.specialty})`);
@@ -1098,6 +1261,7 @@ export class SupabaseService {
 
       // 4. Generalist Technician Qualification
       const isGeneralist =
+        mappedSpecialtyCategory === 'general' ||
         specialtyLower.includes('general') ||
         specialtyLower.includes('maintenance') ||
         specialtyLower.includes('field tech') ||
@@ -1115,8 +1279,14 @@ export class SupabaseService {
         continue;
       }
 
-      // Compute quality, schedule fit, and workload balance adjustments
+      // Compute quality, urgency priority, schedule fit, and workload balance adjustments
       let totalScore = skillScore;
+      const isUrgentRequest = params.priority === 'emergency' || params.priority === 'high';
+
+      if (isUrgentRequest) {
+        totalScore += 20;
+        reasons.push(`Urgent priority match (${params.priority?.toUpperCase()})`);
+      }
 
       // Prefer technician who is free on the customer's exact preferred date/time slot
       if (!scheduleSlot.scheduleAdjusted) {
@@ -1236,9 +1406,35 @@ export class SupabaseService {
       return { candidate: null, allCandidates: [], error: 'Service request not found.' };
     }
 
+    let analyzedCategory: ServiceCategory = targetReq.category;
+    let analyzedPriority: PriorityLevel = targetReq.priority;
+    let analyzedSkill: string | undefined;
+
+    try {
+      const aiAnalysis = await AIService.analyzeProblem(
+        `${targetReq.title || ''}. ${targetReq.description || ''}`
+      );
+      analyzedSkill = aiAnalysis.requiredSkill;
+      if (targetReq.category === 'general' && aiAnalysis.category !== 'general') {
+        analyzedCategory = aiAnalysis.category;
+      }
+      const priorityRank: Record<PriorityLevel, number> = {
+        emergency: 4,
+        high: 3,
+        medium: 2,
+        low: 1,
+      };
+      if (priorityRank[aiAnalysis.priority] > priorityRank[targetReq.priority]) {
+        analyzedPriority = aiAnalysis.priority;
+      }
+    } catch {
+      // Proceed with stored request fields if AI analysis fallback is unavailable
+    }
+
     const evalRes = await this.evaluateEligibleTechnicians({
-      category: targetReq.category,
-      priority: targetReq.priority,
+      category: analyzedCategory,
+      requiredSkill: analyzedSkill,
+      priority: analyzedPriority,
       preferredDate: targetReq.preferredDate,
       preferredTimeSlot: targetReq.preferredTimeSlot,
       description: targetReq.description,
@@ -1261,12 +1457,11 @@ export class SupabaseService {
   }
 
   /**
-   * Confirms and saves AI Dispatch for a single Manager-Approved service request.
-   * - Strictly requires request status === 'approved' (Requirement #2)
-   * - Prevents duplicate assignments and concurrent double-clicks (Requirement #10)
-   * - Selects an available technician and valid non-overlapping appointment date & time (Requirements #3, #4, #5)
-   * - Saves technician assignment, appointment date (preferred_date), appointment time (preferred_time_slot),
-   *   and status = 'assigned' to Supabase and verifies persistence via .select('*') (Requirements #6, #7, #9)
+   * AI Technician Assignment for a single service request.
+   * - Analyzes the request problem description & title via AIService to determine category, required skills, and urgency
+   * - Evaluates available technicians based on skills, workload (< 3 active jobs), and schedule conflicts
+   * - Works on both 'pending' and 'approved' unassigned requests
+   * - If no suitable technician is available, keeps the request in 'pending' status in Supabase
    */
   public static async aiDispatchServiceRequest(
     requestId: string,
@@ -1321,18 +1516,7 @@ export class SupabaseService {
             error: 'Service request not found.',
           };
         }
-        if (req.status === 'pending') {
-          return {
-            assigned: false,
-            requestId,
-            ticketNumber: req.ticketNumber,
-            matchedCategory: req.category,
-            matchedSkill: '',
-            reason: 'Not approved',
-            error: `Ticket ${req.ticketNumber} is still Pending. Please approve the service request before running AI Dispatch.`,
-          };
-        }
-        if (req.status !== 'approved') {
+        if (req.status !== 'pending' && req.status !== 'approved') {
           return {
             assigned: false,
             requestId,
@@ -1346,9 +1530,35 @@ export class SupabaseService {
           };
         }
 
+        let effectiveCategory: ServiceCategory = req.category;
+        let effectivePriority: PriorityLevel = req.priority;
+        let requiredSkill: string | undefined;
+
+        try {
+          const aiAnalysis = await AIService.analyzeProblem(
+            `${req.title || ''}. ${req.description || ''}`
+          );
+          requiredSkill = aiAnalysis.requiredSkill;
+          if (req.category === 'general' && aiAnalysis.category !== 'general') {
+            effectiveCategory = aiAnalysis.category;
+          }
+          const priorityRank: Record<PriorityLevel, number> = {
+            emergency: 4,
+            high: 3,
+            medium: 2,
+            low: 1,
+          };
+          if (priorityRank[aiAnalysis.priority] > priorityRank[req.priority]) {
+            effectivePriority = aiAnalysis.priority;
+          }
+        } catch {
+          // Non-fatal fallback
+        }
+
         const evalRes = await this.evaluateEligibleTechnicians({
-          category: req.category,
-          priority: req.priority,
+          category: effectiveCategory,
+          requiredSkill,
+          priority: effectivePriority,
           preferredDate: scheduleOverride?.preferredDate || req.preferredDate,
           preferredTimeSlot: scheduleOverride?.preferredTimeSlot || req.preferredTimeSlot,
           description: req.description,
@@ -1361,14 +1571,18 @@ export class SupabaseService {
           : evalRes.bestCandidate;
 
         if (!chosen) {
+          // Keep request pending when no suitable technician is available
+          req.status = 'pending';
+          req.category = effectiveCategory;
+          req.priority = effectivePriority;
           return {
             assigned: false,
             requestId: req.id,
             ticketNumber: req.ticketNumber,
-            matchedCategory: req.category,
-            matchedSkill: '',
-            reason: evalRes.diagnosticReason,
-            error: evalRes.diagnosticReason,
+            matchedCategory: effectiveCategory,
+            matchedSkill: requiredSkill || '',
+            reason: `${evalRes.diagnosticReason} Request kept pending.`,
+            error: `${evalRes.diagnosticReason} Request remains pending.`,
           };
         }
 
@@ -1379,7 +1593,7 @@ export class SupabaseService {
               assigned: false,
               requestId: req.id,
               ticketNumber: req.ticketNumber,
-              matchedCategory: req.category,
+              matchedCategory: effectiveCategory,
               matchedSkill: '',
               reason: 'Invalid working hours',
               error:
@@ -1406,7 +1620,7 @@ export class SupabaseService {
             assigned: false,
             requestId: req.id,
             ticketNumber: req.ticketNumber,
-            matchedCategory: req.category,
+            matchedCategory: effectiveCategory,
             matchedSkill: chosen.profile.specialty,
             reason: assignRes.error || 'Assignment failed',
             error: assignRes.error || 'Failed to save assignment.',
@@ -1420,7 +1634,7 @@ export class SupabaseService {
           technicianId: chosen.technician.id,
           technicianName: chosen.technician.fullName,
           technicianPhone: chosen.technician.phone,
-          matchedCategory: req.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: chosen.profile.specialty,
           scheduledDate: finalDate,
           scheduledTimeSlot: finalSlot,
@@ -1450,21 +1664,8 @@ export class SupabaseService {
 
       const currentReq = mapSupabaseToServiceRequest(reqRow);
 
-      // 2. Enforce Requirement #2: Only dispatch manager-approved service requests
-      if (currentReq.status === 'pending') {
-        return {
-          assigned: false,
-          requestId: currentReq.id,
-          ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
-          matchedSkill: '',
-          reason: 'Request not approved yet',
-          error: `Ticket ${currentReq.ticketNumber} is currently Pending. Please approve the service request before running AI Dispatch.`,
-        };
-      }
-
-      // 3. Enforce Requirement #10: Prevent duplicate assignment if already dispatched
-      if (currentReq.status !== 'approved') {
+      // Prevent duplicate assignment if already assigned or closed
+      if (currentReq.status !== 'pending' && currentReq.status !== 'approved') {
         return {
           assigned: false,
           requestId: currentReq.id,
@@ -1478,10 +1679,39 @@ export class SupabaseService {
         };
       }
 
-      // 4. Evaluate eligible technicians & schedules from real Supabase records
+      // 2. Run AI Problem Analysis on the request to identify category, required skills, and urgency
+      let effectiveCategory: ServiceCategory = currentReq.category;
+      let effectivePriority: PriorityLevel = currentReq.priority;
+      let requiredSkill: string | undefined;
+      let aiSummary: string | undefined;
+
+      try {
+        const aiAnalysis = await AIService.analyzeProblem(
+          `${currentReq.title || ''}. ${currentReq.description || ''}`
+        );
+        requiredSkill = aiAnalysis.requiredSkill;
+        aiSummary = aiAnalysis.technicianSummary;
+        if (currentReq.category === 'general' && aiAnalysis.category !== 'general') {
+          effectiveCategory = aiAnalysis.category;
+        }
+        const priorityRank: Record<PriorityLevel, number> = {
+          emergency: 4,
+          high: 3,
+          medium: 2,
+          low: 1,
+        };
+        if (priorityRank[aiAnalysis.priority] > priorityRank[currentReq.priority]) {
+          effectivePriority = aiAnalysis.priority;
+        }
+      } catch {
+        // Proceed with stored request fields if AI analysis fallback is unavailable
+      }
+
+      // 3. Evaluate eligible technicians & schedules from real Supabase records
       const evalRes = await this.evaluateEligibleTechnicians({
-        category: currentReq.category,
-        priority: currentReq.priority,
+        category: effectiveCategory,
+        requiredSkill,
+        priority: effectivePriority,
         preferredDate: scheduleOverride?.preferredDate || currentReq.preferredDate,
         preferredTimeSlot: scheduleOverride?.preferredTimeSlot || currentReq.preferredTimeSlot,
         description: currentReq.description,
@@ -1493,26 +1723,45 @@ export class SupabaseService {
         ? evalRes.allCandidates.find((c) => c.technician.id === scheduleOverride.technicianId) || evalRes.bestCandidate
         : evalRes.bestCandidate;
 
+      // 4. If no suitable technician is available, keep the request pending in Supabase
       if (!candidate) {
+        const nowIso = new Date().toISOString();
+        try {
+          await client
+            .from('service_requests')
+            .update({
+              status: 'pending',
+              category: effectiveCategory,
+              priority: effectivePriority,
+              assigned_technician_id: null,
+              assigned_technician_name: null,
+              assigned_technician_phone: null,
+              updated_at: nowIso,
+            })
+            .eq('id', currentReq.id);
+        } catch {
+          // Non-fatal pending status preservation
+        }
+
         return {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
-          matchedSkill: '',
-          reason: evalRes.diagnosticReason,
-          error: evalRes.diagnosticReason,
+          matchedCategory: effectiveCategory,
+          matchedSkill: requiredSkill || '',
+          reason: `${evalRes.diagnosticReason} Request kept pending.`,
+          error: `${evalRes.diagnosticReason} Request remains pending.`,
         };
       }
 
       // Verify technician role in public.profiles
-      const verifiedTech = await this.getProfile(candidate.technician.id);
+      const verifiedTech = await this.getProfile(candidate.technician.id, candidate.technician.email);
       if (!verifiedTech || verifiedTech.role !== 'technician') {
         return {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: '',
           reason: 'Technician verification failed',
           error: 'Selected technician profile is not an authorized technician in public.profiles.',
@@ -1527,7 +1776,7 @@ export class SupabaseService {
             assigned: false,
             requestId: currentReq.id,
             ticketNumber: currentReq.ticketNumber,
-            matchedCategory: currentReq.category,
+            matchedCategory: effectiveCategory,
             matchedSkill: candidate.profile.specialty,
             reason: 'Outside working hours',
             error:
@@ -1551,7 +1800,7 @@ export class SupabaseService {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: candidate.profile.specialty,
           reason: 'Outside working hours',
           error:
@@ -1575,7 +1824,7 @@ export class SupabaseService {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: candidate.profile.specialty,
           reason: 'Schedule conflict detected',
           error: `Schedule conflict: Technician ${verifiedTech.fullName} already has an active assignment (${conflictCheck.conflictingTicket}) on ${finalDate} during ${conflictCheck.conflictingSlot || finalSlot}. Please choose a non-overlapping appointment slot within working hours (9:00 AM – 6:00 PM).`,
@@ -1583,7 +1832,7 @@ export class SupabaseService {
       }
 
       const nowIso = new Date().toISOString();
-      const dispatchNote = `[AI Dispatch Scheduled] Assigned to ${verifiedTech.fullName} (${candidate.profile.specialty}) | Appointment: ${finalDate} · ${finalSlot}`;
+      const dispatchNote = `[AI Dispatch Scheduled] Assigned to ${verifiedTech.fullName} (${candidate.profile.specialty}) | Skill: ${requiredSkill || candidate.profile.specialty} | Priority: ${effectivePriority.toUpperCase()} | Appointment: ${finalDate} · ${finalSlot}${aiSummary ? ` | Brief: ${aiSummary}` : ''}`;
       const existingNotes = (reqRow.work_notes || '').trim();
       const updatedWorkNotes = existingNotes
         ? existingNotes.includes('[AI Dispatch Scheduled]')
@@ -1596,6 +1845,8 @@ export class SupabaseService {
         .from('service_requests')
         .update({
           status: 'assigned',
+          category: effectiveCategory,
+          priority: effectivePriority,
           assigned_technician_id: verifiedTech.id,
           assigned_technician_name: verifiedTech.fullName,
           assigned_technician_phone: verifiedTech.phone,
@@ -1607,7 +1858,6 @@ export class SupabaseService {
           updated_at: nowIso,
         })
         .eq('id', currentReq.id)
-        .eq('status', 'approved')
         .select('*');
 
       if (updateErr) {
@@ -1616,7 +1866,7 @@ export class SupabaseService {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: candidate.profile.specialty,
           reason: updateErr.message,
           error: `Failed to save technician assignment to Supabase: ${updateErr.message}`,
@@ -1629,7 +1879,7 @@ export class SupabaseService {
           assigned: false,
           requestId: currentReq.id,
           ticketNumber: currentReq.ticketNumber,
-          matchedCategory: currentReq.category,
+          matchedCategory: effectiveCategory,
           matchedSkill: candidate.profile.specialty,
           reason: 'Database update affected 0 rows',
           error:
@@ -1653,7 +1903,7 @@ export class SupabaseService {
       try {
         await client.from('service_request_logs').insert({
           request_id: currentReq.id,
-          from_status: 'approved',
+          from_status: currentReq.status,
           to_status: 'assigned',
           changed_by_user_id: manager.id,
           changed_by_name: manager.fullName,
@@ -1669,7 +1919,7 @@ export class SupabaseService {
         await client.from('notifications').insert({
           recipient_user_id: verifiedTech.id,
           title: `New Job Dispatched: ${currentReq.ticketNumber}`,
-          message: `You have been assigned to ${currentReq.category} ticket "${currentReq.title}" scheduled for ${finalDate} (${finalSlot}). Please review and accept.`,
+          message: `You have been assigned to ${effectiveCategory} ticket "${currentReq.title}" scheduled for ${finalDate} (${finalSlot}). Please review and accept.`,
           request_id: currentReq.id,
           type: 'assignment',
         });
@@ -1720,50 +1970,100 @@ export class SupabaseService {
   }
 
   /**
-   * Batch AI Auto-Dispatch for all Manager-Approved unassigned service requests in the queue.
-   * Strictly dispatches ONLY status === 'approved' requests (never unapproved 'pending' requests).
+   * Batch AI Auto-Dispatch for all unassigned ('pending' or 'approved') service requests in the queue.
+   * - Analyzes each request with AIService to determine category, required skills, and urgency
+   * - Prioritizes urgent requests ('emergency' and 'high') ahead of normal requests
+   * - Assigns suitable available technicians based on skills, workload, and schedule
+   * - If no suitable technician is available for a request, keeps the request in 'pending' status
    */
   public static async autoAssignPendingRequests(manager?: User): Promise<AutoDispatchResult[]> {
     const client = getSupabaseClient();
     const results: AutoDispatchResult[] = [];
 
-    let approvedRequests: ServiceRequest[] = [];
+    let queueRequests: ServiceRequest[] = [];
     if (client) {
       const { data, error } = await client
         .from('service_requests')
         .select('*')
-        .eq('status', 'approved')
+        .in('status', ['pending', 'approved'])
         .order('created_at', { ascending: true });
       if (error || !data) return [];
-      approvedRequests = data
+      queueRequests = data
         .map(mapSupabaseToServiceRequest)
         .filter((r) => !r.assignedTechnicianId);
     } else {
-      approvedRequests = store
+      queueRequests = store
         .getRequests()
-        .filter((r) => r.status === 'approved' && !r.assignedTechnicianId);
+        .filter((r) => (r.status === 'pending' || r.status === 'approved') && !r.assignedTechnicianId);
     }
 
-    if (!approvedRequests.length) return [];
+    if (!queueRequests.length) return [];
 
-    // Prioritize emergency and high urgency requests first
+    // 1. Run AI analysis on each request in the queue to classify category, required skills, and urgency
     const priorityWeight: Record<PriorityLevel, number> = {
       emergency: 4,
       high: 3,
       medium: 2,
       low: 1,
     };
-    approvedRequests.sort((a, b) => priorityWeight[b.priority] - priorityWeight[a.priority]);
+
+    const analyzedQueue: Array<{
+      req: ServiceRequest;
+      category: ServiceCategory;
+      priority: PriorityLevel;
+      requiredSkill?: string;
+      aiSummary?: string;
+    }> = [];
+
+    for (const req of queueRequests) {
+      let effectiveCategory: ServiceCategory = req.category;
+      let effectivePriority: PriorityLevel = req.priority;
+      let requiredSkill: string | undefined;
+      let aiSummary: string | undefined;
+
+      try {
+        const aiAnalysis = await AIService.analyzeProblem(
+          `${req.title || ''}. ${req.description || ''}`
+        );
+        requiredSkill = aiAnalysis.requiredSkill;
+        aiSummary = aiAnalysis.technicianSummary;
+        if (req.category === 'general' && aiAnalysis.category !== 'general') {
+          effectiveCategory = aiAnalysis.category;
+        }
+        if (priorityWeight[aiAnalysis.priority] > priorityWeight[req.priority]) {
+          effectivePriority = aiAnalysis.priority;
+        }
+      } catch {
+        // Fallback to existing request attributes
+      }
+
+      analyzedQueue.push({
+        req,
+        category: effectiveCategory,
+        priority: effectivePriority,
+        requiredSkill,
+        aiSummary,
+      });
+    }
+
+    // 2. Prioritize urgent ('emergency', 'high') requests ahead of normal ('medium', 'low') requests
+    analyzedQueue.sort((a, b) => {
+      const pDiff = priorityWeight[b.priority] - priorityWeight[a.priority];
+      if (pDiff !== 0) return pDiff;
+      return new Date(a.req.createdAt).getTime() - new Date(b.req.createdAt).getTime();
+    });
 
     const newlyAssignedMap: Record<string, number> = {};
     const extraScheduledJobs: Array<{ technicianId: string; date: string; timeSlot: string }> = [];
 
-    for (const req of approvedRequests) {
+    for (const item of analyzedQueue) {
+      const { req, category: effectiveCategory, priority: effectivePriority, requiredSkill, aiSummary } = item;
       if (this.dispatchingRequestIds.has(req.id)) continue;
 
       const evalRes = await this.evaluateEligibleTechnicians({
-        category: req.category,
-        priority: req.priority,
+        category: effectiveCategory,
+        requiredSkill,
+        priority: effectivePriority,
         preferredDate: req.preferredDate,
         preferredTimeSlot: req.preferredTimeSlot,
         description: req.description,
@@ -1775,26 +2075,58 @@ export class SupabaseService {
 
       const bestCandidate = evalRes.bestCandidate;
       if (!bestCandidate) {
+        // Keep the request in 'pending' status when no suitable technician is available
+        if (client && (req.status !== 'pending' || req.priority !== effectivePriority || req.category !== effectiveCategory)) {
+          try {
+            await client
+              .from('service_requests')
+              .update({
+                status: 'pending',
+                category: effectiveCategory,
+                priority: effectivePriority,
+                assigned_technician_id: null,
+                assigned_technician_name: null,
+                assigned_technician_phone: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', req.id);
+          } catch {
+            // Non-fatal pending status update
+          }
+        }
+
         results.push({
           assigned: false,
           requestId: req.id,
           ticketNumber: req.ticketNumber,
-          matchedCategory: req.category,
-          matchedSkill: '',
-          reason: evalRes.diagnosticReason,
-          error: evalRes.diagnosticReason,
+          matchedCategory: effectiveCategory,
+          matchedSkill: requiredSkill || '',
+          reason: `${evalRes.diagnosticReason} Request kept pending.`,
+          error: `${evalRes.diagnosticReason} Request remains pending.`,
         });
         continue;
       }
 
       if (client) {
-        const verified = await this.getProfile(bestCandidate.technician.id);
+        const verified = await this.getProfile(
+          bestCandidate.technician.id,
+          bestCandidate.technician.email
+        );
         if (!verified || verified.role !== 'technician') {
+          results.push({
+            assigned: false,
+            requestId: req.id,
+            ticketNumber: req.ticketNumber,
+            matchedCategory: effectiveCategory,
+            matchedSkill: bestCandidate.profile.specialty,
+            reason: 'Selected technician profile could not be verified.',
+            error: 'Selected technician profile could not be verified.',
+          });
           continue;
         }
 
         const assignedTime = new Date().toISOString();
-        const dispatchNote = `[AI Dispatch Scheduled] Assigned to ${verified.fullName} (${bestCandidate.profile.specialty}) | Appointment: ${bestCandidate.scheduledDate} · ${bestCandidate.scheduledTimeSlot}`;
+        const dispatchNote = `[AI Dispatch Scheduled] Assigned to ${verified.fullName} (${bestCandidate.profile.specialty}) | Skill: ${requiredSkill || bestCandidate.profile.specialty} | Priority: ${effectivePriority.toUpperCase()} | Appointment: ${bestCandidate.scheduledDate} · ${bestCandidate.scheduledTimeSlot}${aiSummary ? ` | Brief: ${aiSummary}` : ''}`;
         const existingNotes = (req.workNotes || '').trim();
         const updatedWorkNotes = existingNotes
           ? `${existingNotes}\n${dispatchNote}`
@@ -1804,6 +2136,8 @@ export class SupabaseService {
           .from('service_requests')
           .update({
             status: 'assigned',
+            category: effectiveCategory,
+            priority: effectivePriority,
             assigned_technician_id: verified.id,
             assigned_technician_name: verified.fullName,
             assigned_technician_phone: verified.phone,
@@ -1815,7 +2149,6 @@ export class SupabaseService {
             updated_at: assignedTime,
           })
           .eq('id', req.id)
-          .eq('status', 'approved')
           .select('*');
 
         const updatedRow = Array.isArray(updatedRows) ? updatedRows[0] : updatedRows;
@@ -1834,12 +2167,12 @@ export class SupabaseService {
           try {
             await client.from('service_request_logs').insert({
               request_id: req.id,
-              from_status: 'approved',
+              from_status: req.status,
               to_status: 'assigned',
               changed_by_user_id: manager?.id || verified.id,
               changed_by_name: manager?.fullName || 'AI Auto-Dispatch Engine',
               changed_by_role: 'manager',
-              note: `AI Dispatch Confirmed: Assigned approved ticket to ${verified.fullName} (${bestCandidate.profile.specialty}) scheduled for ${bestCandidate.scheduledDate} (${bestCandidate.scheduledTimeSlot}). ${bestCandidate.matchReason}`,
+              note: `AI Dispatch Confirmed: Assigned ticket to ${verified.fullName} (${bestCandidate.profile.specialty}) scheduled for ${bestCandidate.scheduledDate} (${bestCandidate.scheduledTimeSlot}). ${bestCandidate.matchReason}`,
             });
           } catch (logErr) {
             console.warn('Non-fatal audit log warning:', logErr);
@@ -1850,7 +2183,7 @@ export class SupabaseService {
             await client.from('notifications').insert({
               recipient_user_id: verified.id,
               title: `New Job Dispatched: ${req.ticketNumber}`,
-              message: `Approved ${req.category} ticket "${req.title}" has been assigned to you for ${bestCandidate.scheduledDate} (${bestCandidate.scheduledTimeSlot}).`,
+              message: `${effectiveCategory} ticket "${req.title}" has been assigned to you for ${bestCandidate.scheduledDate} (${bestCandidate.scheduledTimeSlot}).`,
               request_id: req.id,
               type: 'assignment',
             });
@@ -1878,7 +2211,7 @@ export class SupabaseService {
             technicianId: verified.id,
             technicianName: verified.fullName,
             technicianPhone: verified.phone,
-            matchedCategory: req.category,
+            matchedCategory: effectiveCategory,
             matchedSkill: bestCandidate.profile.specialty,
             scheduledDate: bestCandidate.scheduledDate,
             scheduledTimeSlot: bestCandidate.scheduledTimeSlot,
@@ -1890,7 +2223,7 @@ export class SupabaseService {
             assigned: false,
             requestId: req.id,
             ticketNumber: req.ticketNumber,
-            matchedCategory: req.category,
+            matchedCategory: effectiveCategory,
             matchedSkill: bestCandidate.profile.specialty,
             reason: updateErr?.message || 'Database update affected 0 rows',
             error: updateErr?.message || 'Failed to save assignment in Supabase.',
@@ -1907,11 +2240,21 @@ export class SupabaseService {
             technicianId: bestCandidate.technician.id,
             technicianName: bestCandidate.technician.fullName,
             technicianPhone: bestCandidate.technician.phone,
-            matchedCategory: req.category,
+            matchedCategory: effectiveCategory,
             matchedSkill: bestCandidate.profile.specialty,
             scheduledDate: foundLocal.scheduledDate || bestCandidate.scheduledDate,
             scheduledTimeSlot: foundLocal.scheduledTimeSlot || bestCandidate.scheduledTimeSlot,
             reason: bestCandidate.matchReason,
+          });
+        } else {
+          results.push({
+            assigned: false,
+            requestId: req.id,
+            ticketNumber: req.ticketNumber,
+            matchedCategory: effectiveCategory,
+            matchedSkill: requiredSkill || '',
+            reason: `${evalRes.diagnosticReason} Request kept pending.`,
+            error: `${evalRes.diagnosticReason} Request remains pending.`,
           });
         }
       }
@@ -1954,10 +2297,13 @@ export class SupabaseService {
         preferredDate: normalizedDate,
         preferredTimeSlot: canonicalSlot,
       });
+      const autoRes = store.autoAssignPendingRequests();
+      const matchedAuto = autoRes.find((r) => r.requestId === req.id && r.assigned);
+      const updatedReq = store.getRequestById(req.id) || req;
       return {
         success: true,
-        request: req,
-        autoDispatchedTo: null,
+        request: updatedReq,
+        autoDispatchedTo: matchedAuto?.techName || null,
       };
     }
 
@@ -1970,7 +2316,52 @@ export class SupabaseService {
       const ticketNumber = `FXN-${year}-${randomSuffix}`;
       const nowIso = new Date().toISOString();
 
-      // Customer service requests always enter 'pending' status awaiting Manager Approval first (Requirement #2)
+      // Evaluate if a suitable available technician can be automatically assigned right away
+      let initialStatus: ServiceStatus = 'pending';
+      let assignedTechId: string | null = null;
+      let assignedTechName: string | null = null;
+      let assignedTechPhone: string | null = null;
+      let assignedAtIso: string | null = null;
+      let finalScheduledDate = normalizedDate;
+      let finalScheduledSlot = canonicalSlot;
+      let matchNote = '';
+
+      try {
+        const evalRes = await this.evaluateEligibleTechnicians({
+          category: params.category,
+          requiredSkill: params.requiredSkill,
+          priority: params.priority,
+          preferredDate: normalizedDate,
+          preferredTimeSlot: canonicalSlot,
+          description: params.description,
+          title: params.title,
+        });
+
+        if (evalRes.bestCandidate) {
+          const verifiedTech = await this.getProfile(
+            evalRes.bestCandidate.technician.id,
+            evalRes.bestCandidate.technician.email
+          );
+          if (verifiedTech && verifiedTech.role === 'technician') {
+            initialStatus = 'assigned';
+            assignedTechId = verifiedTech.id;
+            assignedTechName = verifiedTech.fullName;
+            assignedTechPhone = verifiedTech.phone;
+            assignedAtIso = nowIso;
+            finalScheduledDate = evalRes.bestCandidate.scheduledDate;
+            finalScheduledSlot = evalRes.bestCandidate.scheduledTimeSlot;
+            matchNote = `\n[AI Dispatch Scheduled] Assigned to ${verifiedTech.fullName} (${evalRes.bestCandidate.profile.specialty}) | Appointment: ${finalScheduledDate} · ${finalScheduledSlot}`;
+          }
+        }
+      } catch {
+        // If evaluation fails or no suitable technician is available, keep request pending
+      }
+
+      const baseNotes =
+        params.technicianSummary || params.requiredSkill
+          ? `[AI Technician Brief] Skill: ${params.requiredSkill || 'General'} | Standard Rate: PKR ${applicableRate.toLocaleString()}/hour. Summary: ${params.technicianSummary || ''}`
+          : `[Standard Category Rate] PKR ${applicableRate.toLocaleString()}/hour`;
+
       const insertData = {
         ticket_number: ticketNumber,
         customer_id: params.customerId,
@@ -1981,19 +2372,16 @@ export class SupabaseService {
         category: params.category,
         description: params.description.trim(),
         priority: params.priority,
-        status: 'pending' as ServiceStatus,
+        status: initialStatus,
         service_address: params.serviceAddress,
-        preferred_date: normalizedDate,
-        preferred_time_slot: canonicalSlot,
+        preferred_date: finalScheduledDate,
+        preferred_time_slot: finalScheduledSlot,
         attachments: params.attachments || [],
-        assigned_technician_id: null,
-        assigned_technician_name: null,
-        assigned_technician_phone: null,
-        assigned_at: null,
-        work_notes:
-          params.technicianSummary || params.requiredSkill
-            ? `[AI Technician Brief] Skill: ${params.requiredSkill || 'General'} | Standard Rate: PKR ${applicableRate.toLocaleString()}/hour. Summary: ${params.technicianSummary || ''}`
-            : `[Standard Category Rate] PKR ${applicableRate.toLocaleString()}/hour`,
+        assigned_technician_id: assignedTechId,
+        assigned_technician_name: assignedTechName,
+        assigned_technician_phone: assignedTechPhone,
+        assigned_at: assignedAtIso,
+        work_notes: `${baseNotes}${matchNote}`,
         created_at: nowIso,
         updated_at: nowIso,
       };
@@ -2011,25 +2399,42 @@ export class SupabaseService {
 
       const newRequest = mapSupabaseToServiceRequest(data);
 
-      // Audit Log: Placed in Pending Queue awaiting Manager Approval
+      // Audit Log
       try {
         await client.from('service_request_logs').insert({
           request_id: newRequest.id,
           from_status: 'pending',
-          to_status: 'pending',
+          to_status: newRequest.status,
           changed_by_user_id: params.customerId,
           changed_by_name: newRequest.customerName,
           changed_by_role: 'customer',
-          note: `Service request submitted by customer (${params.category}). Awaiting Operations Manager approval before AI Dispatch.`,
+          note:
+            newRequest.status === 'assigned' && assignedTechName
+              ? `Service request submitted (${params.category}) and automatically assigned to ${assignedTechName} for ${finalScheduledDate} (${finalScheduledSlot}).`
+              : `Service request submitted by customer (${params.category}). Kept pending until a suitable technician is available.`,
         });
       } catch (logErr) {
         console.warn('Non-fatal log insert warning:', logErr);
       }
 
+      if (newRequest.status === 'assigned' && assignedTechId && assignedTechName) {
+        try {
+          await client.from('notifications').insert({
+            recipient_user_id: assignedTechId,
+            title: `New Job Dispatched: ${newRequest.ticketNumber}`,
+            message: `You have been assigned to ${newRequest.category} ticket "${newRequest.title}" scheduled for ${finalScheduledDate} (${finalScheduledSlot}).`,
+            request_id: newRequest.id,
+            type: 'assignment',
+          });
+        } catch {
+          // Non-fatal notification
+        }
+      }
+
       return {
         success: true,
         request: newRequest,
-        autoDispatchedTo: null,
+        autoDispatchedTo: newRequest.status === 'assigned' ? assignedTechName : null,
       };
     } catch (err: any) {
       return { success: false, error: err.message || 'Error creating request' };
@@ -2146,14 +2551,7 @@ export class SupabaseService {
 
       if (fetchErr || !req) return { success: false, error: 'Request not found' };
 
-      if (req.status === 'pending') {
-        return {
-          success: false,
-          error: 'Please approve the service request before assigning a technician.',
-        };
-      }
-
-      if (req.status !== 'approved' && req.status !== 'assigned') {
+      if (req.status !== 'pending' && req.status !== 'approved' && req.status !== 'assigned') {
         return {
           success: false,
           error: `Cannot assign technician when request is in "${req.status}" status.`,
@@ -3697,19 +4095,33 @@ export class SupabaseService {
       for (const d of rawProfiles) {
         const cleanSkills = Array.isArray(d.additional_skills)
           ? d.additional_skills.filter((s: string) => !String(s).startsWith('__rate_'))
+          : Array.isArray(d.skills)
+          ? d.skills
           : [];
-        profileById.set(d.id, {
+        const rawStatus = String(d.status || 'available')
+          .trim()
+          .toLowerCase();
+        const normalizedTechStatus: 'available' | 'on_job' | 'off_duty' =
+          rawStatus === 'off_duty' || rawStatus === 'offline' || rawStatus === 'unavailable'
+            ? 'off_duty'
+            : rawStatus === 'on_job' || rawStatus === 'busy'
+            ? 'on_job'
+            : 'available';
+        const techUserId = d.user_id || d.id;
+        const profObj: TechnicianProfile = {
           id: d.id,
-          userId: d.id,
+          userId: techUserId,
           specialty: d.specialty || 'General Field Tech',
           additionalSkills: cleanSkills,
-          status: d.status || 'available',
+          status: normalizedTechStatus,
           rating: d.rating ? Number(d.rating) : 5.0,
           completedJobsCount: d.completed_jobs_count ? Number(d.completed_jobs_count) : 0,
           experienceYears: d.experience_years ? Number(d.experience_years) : undefined,
           licenseNumber: d.license_number || undefined,
           hourlyRate: d.hourly_rate ? Number(d.hourly_rate) : 2000,
-        });
+        };
+        profileById.set(d.id, profObj);
+        if (techUserId) profileById.set(techUserId, profObj);
       }
 
       if (!techUserErr && techUsers && techUsers.length > 0) {
