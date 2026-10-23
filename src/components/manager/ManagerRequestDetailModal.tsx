@@ -332,24 +332,19 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
 
           {/* Manager Approval & Dispatch Controls */}
           {request.status !== 'completed' && request.status !== 'cancelled' && (
-            <div className="bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl p-4 space-y-4">
+            <div className="bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl p-3.5 space-y-3">
               {request.status === 'pending' && (
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#E6E1D6]">
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                      Step 1: Approve Request
-                    </h4>
-                    <p className="text-xs text-[#5C5852] mt-0.5">
-                      Approve this request to unlock technician dispatch.
-                    </p>
-                  </div>
+                <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#E6E1D6]">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                    Pending Approval
+                  </span>
                   <button
                     onClick={handleApprove}
                     disabled={isSubmitting}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0"
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0"
                   >
-                    <CheckCircle2 className="w-4 h-4" />
-                    Approve Request
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Approve
                   </button>
                 </div>
               )}
@@ -362,24 +357,24 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                   {/* AI Dispatch Recommendation */}
                   {(request.status === 'pending' || request.status === 'approved') &&
                     !request.assignedTechnicianId && (
-                      <div className="bg-white rounded-xl p-3.5 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="bg-white rounded-xl p-3 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                         <div>
                           <div className="flex items-center gap-1.5 text-xs font-bold text-[#143628]">
-                            <Sparkles className="w-4 h-4 text-amber-500" />
-                            <span>AI Dispatch Recommendation</span>
+                            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                            <span>AI Dispatch</span>
                           </div>
                           {isLoadingAI ? (
-                            <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              Analyzing issue, required skills & technician availability...
+                            <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1.5">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Finding matching technician...
                             </p>
                           ) : bestCandidate ? (
-                            <p className="text-xs text-[#5C5852] mt-1">
-                              Best Match: <strong className="text-[#18181B]">{bestCandidate.technician.fullName}</strong> ({bestCandidate.profile.specialty}) · {bestCandidate.scheduledDate} · {bestCandidate.scheduledTimeSlot}
+                            <p className="text-xs text-[#5C5852] mt-0.5">
+                              Match: <strong className="text-[#18181B]">{bestCandidate.technician.fullName}</strong> ({bestCandidate.profile.specialty}) · {bestCandidate.scheduledDate} · {bestCandidate.scheduledTimeSlot}
                             </p>
                           ) : (
-                            <p className="text-xs text-amber-800 mt-1">
-                              {aiDispatchError || 'No suitable available specialist found. Request will remain pending.'}
+                            <p className="text-xs text-amber-800 mt-0.5">
+                              {aiDispatchError || 'No available technician. Request stays pending.'}
                             </p>
                           )}
                         </div>
@@ -389,7 +384,7 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                             type="button"
                             onClick={handleConfirmAIDispatch}
                             disabled={isDispatchingAI || isSubmitting}
-                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0 cursor-pointer"
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shrink-0 cursor-pointer"
                           >
                             {isDispatchingAI ? (
                               <>
@@ -399,7 +394,7 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                             ) : (
                               <>
                                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                                Confirm AI Dispatch
+                                AI Dispatch
                               </>
                             )}
                           </button>
@@ -408,82 +403,67 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
                     )}
 
                   {/* Manual Assignment / Schedule Override */}
-                  <form onSubmit={handleAssignManual} className="space-y-3">
+                  <form onSubmit={handleAssignManual} className="space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold uppercase tracking-wider text-[#5C5852] flex items-center gap-1.5">
                         <UserCheck className="w-3.5 h-3.5 text-[#143628]" />
-                        {request.assignedTechnicianId ? 'Reassign Technician' : 'Assign Technician'}
+                        {request.assignedTechnicianId ? 'Reassign' : 'Assign Technician'}
                       </label>
                       <span className="text-[11px] font-semibold text-[#143628]">
                         {WORKING_HOURS_LABEL}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                          Technician
-                        </label>
-                        <select
-                          value={selectedTechId}
-                          onChange={(e) => setSelectedTechId(e.target.value)}
-                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
-                        >
-                          <option value="">-- Select Technician --</option>
-                          {technicians.map((tech) => {
-                            const prof = getTechProfile(tech.id);
-                            const activeCount = getActiveJobCount(tech.id);
-                            return (
-                              <option
-                                key={tech.id}
-                                value={tech.id}
-                                disabled={prof?.status === 'off_duty'}
-                              >
-                                {tech.fullName} — {prof?.specialty || 'General'} ({activeCount}/3 jobs)
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                          Date
-                        </label>
-                        <input
-                          type="date"
-                          min={minDateStr}
-                          value={scheduleDate}
-                          onChange={(e) => setScheduleDate(e.target.value)}
-                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                          Time Slot
-                        </label>
-                        <select
-                          value={scheduleTimeSlot}
-                          onChange={(e) => setScheduleTimeSlot(e.target.value)}
-                          className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
-                        >
-                          {WORKING_TIME_SLOTS.map((slot) => (
-                            <option key={slot} value={slot}>
-                              {slot}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <select
+                        value={selectedTechId}
+                        onChange={(e) => setSelectedTechId(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
+                      >
+                        <option value="">Select Technician</option>
+                        {technicians.map((tech) => {
+                          const prof = getTechProfile(tech.id);
+                          const activeCount = getActiveJobCount(tech.id);
+                          return (
+                            <option
+                              key={tech.id}
+                              value={tech.id}
+                              disabled={prof?.status === 'off_duty'}
+                            >
+                              {tech.fullName} — {prof?.specialty || 'General'} ({activeCount}/3)
                             </option>
-                          ))}
-                        </select>
-                      </div>
+                          );
+                        })}
+                      </select>
+
+                      <input
+                        type="date"
+                        min={minDateStr}
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
+                      />
+
+                      <select
+                        value={scheduleTimeSlot}
+                        onChange={(e) => setScheduleTimeSlot(e.target.value)}
+                        className="w-full px-2.5 py-2 bg-white border border-[#E6E1D6] rounded-lg text-xs"
+                      >
+                        {WORKING_TIME_SLOTS.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {slot}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div className="flex justify-end">
                       <button
                         type="submit"
                         disabled={isSubmitting || isDispatchingAI}
-                        className="px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-xs font-semibold rounded-xl"
+                        className="px-4 py-1.5 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-xs font-semibold rounded-xl"
                       >
-                        {request.assignedTechnicianId ? 'Save Reassignment' : 'Assign Technician'}
+                        {request.assignedTechnicianId ? 'Reassign' : 'Assign'}
                       </button>
                     </div>
                   </form>
@@ -612,30 +592,29 @@ export const ManagerRequestDetailModal: React.FC<ManagerRequestDetailModalProps>
               ) : (
                 <form
                   onSubmit={handleCancel}
-                  className="bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-2.5"
+                  className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2"
                 >
-                  <h5 className="text-xs font-bold text-red-900">Cancel Service Request</h5>
                   <input
                     type="text"
                     value={cancelReason}
                     onChange={(e) => setCancelReason(e.target.value)}
-                    placeholder="Reason for cancellation..."
+                    placeholder="Cancellation reason *"
                     className="w-full px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs"
                   />
                   <div className="flex items-center gap-2">
                     <button
                       type="submit"
                       disabled={isSubmitting}
-                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
+                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
                     >
-                      Confirm Cancel
+                      Confirm
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowCancelPrompt(false)}
-                      className="px-3.5 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
+                      className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
                     >
-                      Keep Active
+                      Back
                     </button>
                   </div>
                 </form>

@@ -63,7 +63,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     try {
       if (customerMode === 'signup') {
         if (!custFullName.trim() || !custEmail.trim() || !custPhone.trim() || !custPassword.trim()) {
-          setErrorMessage('Please fill in all required registration fields.');
+          setErrorMessage('Fill in all required fields.');
           setLoading(false);
           return;
         }
@@ -76,30 +76,30 @@ export const AuthView: React.FC<AuthViewProps> = ({
         });
 
         if (!res.success) {
-          setErrorMessage(res.error || 'Failed to create customer account.');
+          setErrorMessage(res.error || 'Could not create account.');
           setLoading(false);
           return;
         }
 
-        showToast(`Welcome ${custFullName}! Customer account successfully registered.`, 'success');
+        showToast('Account created.', 'success');
       } else {
         if (!custEmail.trim() || !custPassword.trim()) {
-          setErrorMessage('Please enter your email and password.');
+          setErrorMessage('Enter email and password.');
           setLoading(false);
           return;
         }
 
         const res = await login(custEmail.trim(), custPassword.trim(), 'customer');
         if (!res.success) {
-          setErrorMessage(res.error || 'Login failed. Please verify credentials.');
+          setErrorMessage(res.error || 'Invalid email or password.');
           setLoading(false);
           return;
         }
 
-        showToast('Signed in to Customer Portal.', 'success');
+        showToast('Signed in.', 'success');
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'An unexpected authentication error occurred.');
+      setErrorMessage(err.message || 'Authentication error.');
     } finally {
       setLoading(false);
     }
@@ -112,24 +112,21 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     try {
       if (!techEmail.trim() || !techPassword.trim()) {
-        setErrorMessage('Please enter your technician credentials.');
+        setErrorMessage('Enter email and password.');
         setLoading(false);
         return;
       }
 
       const res = await login(techEmail.trim(), techPassword.trim(), 'technician');
       if (!res.success) {
-        setErrorMessage(
-          res.error ||
-            'Technician credentials not recognized or role mismatch. Technicians must be provisioned by Operations Management.'
-        );
+        setErrorMessage(res.error || 'Invalid technician credentials.');
         setLoading(false);
         return;
       }
 
-      showToast('Signed in to Technician Work Console.', 'success');
+      showToast('Signed in.', 'success');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Authentication error');
+      setErrorMessage(err.message || 'Authentication error.');
     } finally {
       setLoading(false);
     }
@@ -142,41 +139,38 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     try {
       if (!mgrEmail.trim() || !mgrPassword.trim()) {
-        setErrorMessage('Please enter manager email and password.');
+        setErrorMessage('Enter email and password.');
         setLoading(false);
         return;
       }
 
       const res = await login(mgrEmail.trim(), mgrPassword.trim(), 'manager');
       if (!res.success) {
-        setErrorMessage(
-          res.error ||
-            'Manager login failed. Only existing authorized Operations Manager accounts in Supabase can access this console.'
-        );
+        setErrorMessage(res.error || 'Invalid manager credentials.');
         setLoading(false);
         return;
       }
 
-      showToast('Signed in to Operations Management Console.', 'success');
+      showToast('Signed in.', 'success');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Authentication error');
+      setErrorMessage(err.message || 'Authentication error.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#FAF8F5] text-[#1F2421] flex flex-col justify-between px-4 sm:px-6 lg:px-8 py-6 sm:py-10 w-full max-w-full overflow-x-hidden font-sans">
+    <div className="min-h-screen bg-[#FAF8F5] text-[#1F2421] flex flex-col justify-between px-4 sm:px-6 py-6 w-full max-w-full overflow-x-hidden font-sans">
       {/* Top Header */}
-      <div className="max-w-4xl mx-auto w-full flex items-center justify-between py-2 gap-4">
+      <div className="max-w-md mx-auto w-full flex items-center justify-between py-2 gap-4">
         <button
           onClick={onBackToHome}
-          className="flex items-center gap-2.5 cursor-pointer focus:outline-none group text-left"
+          className="flex items-center gap-2 cursor-pointer focus:outline-none group text-left"
         >
-          <div className="w-9 h-9 rounded-lg bg-[#143628] text-[#FDFBF7] flex items-center justify-center font-serif font-bold text-lg shadow-xs group-hover:bg-[#1B4332] transition-colors">
+          <div className="w-8 h-8 rounded-lg bg-[#143628] text-[#FDFBF7] flex items-center justify-center font-serif font-bold text-base">
             F
           </div>
-          <span className="font-serif font-bold text-2xl tracking-tight text-[#143628]">
+          <span className="font-serif font-bold text-xl tracking-tight text-[#143628]">
             FixNear
           </span>
         </button>
@@ -184,24 +178,24 @@ export const AuthView: React.FC<AuthViewProps> = ({
         {onBackToHome && (
           <button
             onClick={onBackToHome}
-            className="flex items-center gap-1.5 text-xs sm:text-sm font-medium text-[#4A554E] hover:text-[#143628] transition-colors px-3.5 py-1.5 rounded-lg hover:bg-[#EFEAE1] border border-[#DDD5C7] cursor-pointer"
+            className="text-xs font-medium text-[#4A554E] hover:text-[#143628] px-3 py-1.5 rounded-lg hover:bg-[#EFEAE1] border border-[#DDD5C7] cursor-pointer"
           >
-            <span>← Return to Public Site</span>
+            ← Back
           </button>
         )}
       </div>
 
       {/* Main Auth Card */}
-      <div className="max-w-xl mx-auto w-full my-6 sm:my-10">
-        <div className="bg-white border border-[#E8E2D8] rounded-2xl shadow-sm p-6 sm:p-10 w-full">
+      <div className="max-w-md mx-auto w-full my-6">
+        <div className="bg-white border border-[#E8E2D8] rounded-2xl shadow-sm p-5 sm:p-7 w-full">
           {/* Role selector tabs */}
-          <div className="grid grid-cols-3 p-1 bg-[#F5F2EB] rounded-xl border border-[#E2DBD0] mb-6 gap-1">
+          <div className="grid grid-cols-3 p-1 bg-[#F5F2EB] rounded-xl border border-[#E2DBD0] mb-5 gap-1">
             <button
               onClick={() => {
                 setActivePortal('customer');
                 setErrorMessage(null);
               }}
-              className={`py-2 px-2 text-xs sm:text-sm font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              className={`py-2 px-2 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 activePortal === 'customer'
                   ? 'bg-[#143628] text-[#FDFBF7] shadow-xs font-semibold'
                   : 'text-[#526056] hover:text-[#143628]'
@@ -216,7 +210,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 setActivePortal('technician');
                 setErrorMessage(null);
               }}
-              className={`py-2 px-2 text-xs sm:text-sm font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              className={`py-2 px-2 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 activePortal === 'technician'
                   ? 'bg-[#143628] text-[#FDFBF7] shadow-xs font-semibold'
                   : 'text-[#526056] hover:text-[#143628]'
@@ -231,7 +225,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 setActivePortal('manager');
                 setErrorMessage(null);
               }}
-              className={`py-2 px-2 text-xs sm:text-sm font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              className={`py-2 px-2 text-xs font-medium rounded-lg flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 activePortal === 'manager'
                   ? 'bg-[#143628] text-[#FDFBF7] shadow-xs font-semibold'
                   : 'text-[#526056] hover:text-[#143628]'
@@ -244,28 +238,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
           {/* Error notice */}
           {errorMessage && (
-            <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2.5 text-xs sm:text-sm text-rose-800">
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-800">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-              <div className="flex-1 leading-relaxed break-words">{errorMessage}</div>
+              <div className="flex-1 break-words">{errorMessage}</div>
             </div>
           )}
 
-          {/* ======================================================== */}
           {/* 1. CUSTOMER PORTAL TAB */}
-          {/* ======================================================== */}
           {activePortal === 'customer' && (
-            <div className="space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-[#F0EBE3]">
-                <div>
-                  <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#143628]">
-                    {customerMode === 'signup' ? 'Customer Sign Up' : 'Customer Sign In'}
-                  </h2>
-                  <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
-                    {customerMode === 'signup'
-                      ? 'Create a customer account to submit service tickets and track repairs'
-                      : 'Sign in to review your active repair orders and request services'}
-                  </p>
-                </div>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-2.5 border-b border-[#F0EBE3]">
+                <h2 className="font-serif text-lg sm:text-xl font-bold text-[#143628]">
+                  {customerMode === 'signup' ? 'Create Account' : 'Customer Sign In'}
+                </h2>
 
                 <div className="flex items-center gap-1 bg-[#F5F2EB] p-1 rounded-lg border border-[#E2DBD0]">
                   <button
@@ -274,7 +259,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                       setCustomerMode('signin');
                       setErrorMessage(null);
                     }}
-                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors cursor-pointer ${
+                    className={`px-2.5 py-1 text-xs rounded-md font-medium cursor-pointer ${
                       customerMode === 'signin'
                         ? 'bg-[#143628] text-[#FDFBF7] font-semibold'
                         : 'text-[#526056] hover:text-[#143628]'
@@ -288,7 +273,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                       setCustomerMode('signup');
                       setErrorMessage(null);
                     }}
-                    className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors cursor-pointer ${
+                    className={`px-2.5 py-1 text-xs rounded-md font-medium cursor-pointer ${
                       customerMode === 'signup'
                         ? 'bg-[#143628] text-[#FDFBF7] font-semibold'
                         : 'text-[#526056] hover:text-[#143628]'
@@ -299,12 +284,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 </div>
               </div>
 
-              <form onSubmit={handleCustomerSubmit} className="space-y-4">
+              <form onSubmit={handleCustomerSubmit} className="space-y-3">
                 {customerMode === 'signup' && (
                   <>
                     <div>
                       <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                        Full Legal Name *
+                        Name *
                       </label>
                       <input
                         type="text"
@@ -312,12 +297,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         value={custFullName}
                         onChange={(e) => setCustFullName(e.target.value)}
                         placeholder="Full name"
-                        className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                        className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                        Mobile Phone Number *
+                        Phone *
                       </label>
                       <input
                         type="tel"
@@ -325,7 +310,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                         value={custPhone}
                         onChange={(e) => setCustPhone(e.target.value)}
                         placeholder="Phone number"
-                        className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0 font-mono"
+                        className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                       />
                     </div>
                   </>
@@ -333,15 +318,15 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                    Email Address *
+                    Email *
                   </label>
                   <input
                     type="email"
                     required
                     value={custEmail}
                     onChange={(e) => setCustEmail(e.target.value)}
-                    placeholder="customer@example.com"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Email address"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
@@ -354,92 +339,50 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     required
                     value={custPassword}
                     onChange={(e) => setCustPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Password"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs mt-3 disabled:opacity-60"
+                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
                   <span>
                     {loading
-                      ? 'Processing...'
+                      ? 'Please wait...'
                       : customerMode === 'signup'
-                      ? 'Sign Up & Open Customer Portal'
-                      : 'Sign In to Customer Portal'}
+                      ? 'Sign Up'
+                      : 'Sign In'}
                   </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
-
-                <div className="pt-2 text-center text-xs text-[#526056]">
-                  {customerMode === 'signin' ? (
-                    <span>
-                      Don&apos;t have a customer account?{' '}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomerMode('signup');
-                          setErrorMessage(null);
-                        }}
-                        className="font-semibold text-[#143628] hover:underline cursor-pointer"
-                      >
-                        Sign Up
-                      </button>
-                    </span>
-                  ) : (
-                    <span>
-                      Already have an account?{' '}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomerMode('signin');
-                          setErrorMessage(null);
-                        }}
-                        className="font-semibold text-[#143628] hover:underline cursor-pointer"
-                      >
-                        Sign In
-                      </button>
-                    </span>
-                  )}
-                </div>
               </form>
             </div>
           )}
 
-          {/* ======================================================== */}
           {/* 2. TECHNICIAN PORTAL TAB */}
-          {/* ======================================================== */}
           {activePortal === 'technician' && (
-            <div className="space-y-5">
-              <div className="pb-3 border-b border-[#F0EBE3]">
-                <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#143628]">
-                  Field Technician Sign In
+            <div className="space-y-4">
+              <div className="pb-2.5 border-b border-[#F0EBE3]">
+                <h2 className="font-serif text-lg sm:text-xl font-bold text-[#143628]">
+                  Technician Sign In
                 </h2>
-                <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
-                  Access your assigned work orders, update job status, and record parts.
-                </p>
               </div>
 
-              <div className="p-3.5 bg-[#F5F2EB] border border-[#E2DBD0] rounded-lg text-xs text-[#4A554E] leading-relaxed">
-                <span className="font-semibold text-[#143628]">Notice:</span> Field technicians are
-                provisioned by Operations Management. If you do not have credentials, contact your dispatch manager.
-              </div>
-
-              <form onSubmit={handleTechnicianSubmit} className="space-y-4">
+              <form onSubmit={handleTechnicianSubmit} className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                    Technician Email Address *
+                    Email *
                   </label>
                   <input
                     type="email"
                     required
                     value={techEmail}
                     onChange={(e) => setTechEmail(e.target.value)}
-                    placeholder="technician@fixnear.internal"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Email address"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
@@ -452,54 +395,44 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     required
                     value={techPassword}
                     onChange={(e) => setTechPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Password"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs mt-3 disabled:opacity-60"
+                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
-                  <span>{loading ? 'Authenticating...' : 'Sign In to Technician Console'}</span>
+                  <span>{loading ? 'Signing in...' : 'Sign In'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </form>
             </div>
           )}
 
-          {/* ======================================================== */}
           {/* 3. MANAGER PORTAL TAB */}
-          {/* ======================================================== */}
           {activePortal === 'manager' && (
-            <div className="space-y-5">
-              <div className="pb-3 border-b border-[#F0EBE3]">
-                <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#143628]">
-                  Operations Manager Sign In
+            <div className="space-y-4">
+              <div className="pb-2.5 border-b border-[#F0EBE3]">
+                <h2 className="font-serif text-lg sm:text-xl font-bold text-[#143628]">
+                  Manager Sign In
                 </h2>
-                <p className="text-xs sm:text-sm text-[#4A554E] mt-0.5">
-                  Supervise dispatch workflows, technicians, and system operations.
-                </p>
               </div>
 
-              <div className="p-3.5 bg-[#F5F2EB] border border-[#E2DBD0] rounded-lg text-xs text-[#4A554E] leading-relaxed">
-                <span className="font-semibold text-[#143628]">Authorized Personnel Only:</span> Sign in
-                with your existing Operations Manager account verified in <code className="font-mono text-[#143628]">public.profiles</code>.
-              </div>
-
-              <form onSubmit={handleManagerSubmit} className="space-y-4">
+              <form onSubmit={handleManagerSubmit} className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-[#2C3830] mb-1">
-                    Manager Email Address *
+                    Email *
                   </label>
                   <input
                     type="email"
                     required
                     value={mgrEmail}
                     onChange={(e) => setMgrEmail(e.target.value)}
-                    placeholder="manager@fixnear.internal"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Email address"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
@@ -512,17 +445,17 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     required
                     value={mgrPassword}
                     onChange={(e) => setMgrPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 text-xs sm:text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] placeholder-[#8C9B90] focus:outline-none focus:border-[#143628] min-w-0"
+                    placeholder="Password"
+                    className="w-full px-3 py-2 text-sm bg-[#FAF8F5] border border-[#DDD5C7] rounded-lg text-[#1F2421] focus:outline-none focus:border-[#143628]"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs mt-3 disabled:opacity-60"
+                  className="w-full py-2.5 px-4 bg-[#143628] hover:bg-[#1B4332] text-[#FDFBF7] font-medium text-xs sm:text-sm rounded-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                 >
-                  <span>{loading ? 'Authenticating...' : 'Sign In to Manager Console'}</span>
+                  <span>{loading ? 'Signing in...' : 'Sign In'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </form>
@@ -532,18 +465,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
       </div>
 
       {/* Footer */}
-      <div className="max-w-4xl mx-auto w-full text-center text-xs text-[#69776E] py-4 space-y-1">
-        <div>FixNear Platform · Standardized Pakistani Rupee (PKR) Field Services</div>
-        {onBackToHome && (
-          <div>
-            <button
-              onClick={onBackToHome}
-              className="text-[#143628] hover:underline transition-colors cursor-pointer"
-            >
-              ← Return to FixNear Public Homepage
-            </button>
-          </div>
-        )}
+      <div className="max-w-md mx-auto w-full text-center text-xs text-[#69776E] py-2">
+        FixNear
       </div>
     </div>
   );

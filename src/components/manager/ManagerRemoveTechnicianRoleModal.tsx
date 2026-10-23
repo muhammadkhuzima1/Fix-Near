@@ -74,16 +74,14 @@ export const ManagerRemoveTechnicianRoleModal: React.FC<ManagerRemoveTechnicianR
       }
 
       showToast(
-        `Technician role removed for ${technician.fullName}. Account updated to Customer.`,
+        `${technician.fullName} updated to Customer role.`,
         'success'
       );
 
       onRefresh();
       onClose();
     } catch (err: any) {
-      setErrorMessage(
-        err.message || 'An unexpected error occurred while removing the technician role.'
-      );
+      setErrorMessage(err.message || 'Could not update role.');
     } finally {
       setLoading(false);
     }
@@ -98,26 +96,21 @@ export const ManagerRemoveTechnicianRoleModal: React.FC<ManagerRemoveTechnicianR
       aria-labelledby="remove-tech-role-title"
     >
       <div
-        className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden my-auto animate-in fade-in duration-150"
+        className="bg-white border border-slate-200 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden my-auto animate-in fade-in duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-start justify-between bg-amber-50/60">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-              <UserMinus className="w-5 h-5 stroke-[2.2]" />
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-amber-50/60">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+              <UserMinus className="w-4 h-4" />
             </div>
-            <div className="min-w-0">
-              <h2
-                id="remove-tech-role-title"
-                className="text-base sm:text-lg font-bold text-slate-900 truncate"
-              >
-                Remove Technician Role
-              </h2>
-              <p className="text-xs text-amber-800 mt-0.5 font-medium truncate">
-                Change role in database from Technician to Customer
-              </p>
-            </div>
+            <h2
+              id="remove-tech-role-title"
+              className="text-base font-bold text-slate-900"
+            >
+              Change to Customer Role
+            </h2>
           </div>
 
           <button
@@ -131,111 +124,46 @@ export const ManagerRemoveTechnicianRoleModal: React.FC<ManagerRemoveTechnicianR
         </div>
 
         {/* Modal Body */}
-        <div className="p-4 sm:p-6 space-y-4">
-          {/* Error Message */}
+        <div className="p-4 sm:p-5 space-y-3">
           {errorMessage && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorMessage}</span>
             </div>
           )}
 
-          {/* Technician Profile Summary */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-full bg-slate-900 text-white font-bold text-xs flex items-center justify-center shrink-0">
-                  {technician.fullName.charAt(0)}
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold text-slate-900 truncate">
-                    {technician.fullName}
-                  </div>
-                  <div className="text-xs text-slate-500 font-mono truncate">
-                    {technician.email}
-                  </div>
-                </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-slate-900 truncate">
+                {technician.fullName}
               </div>
-
-              <div className="text-right shrink-0">
-                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
-                  <span>Current: Technician</span>
-                </span>
-                <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                  → New: Customer
-                </div>
+              <div className="text-xs text-slate-500 font-mono truncate">
+                {technician.email}
               </div>
             </div>
-
-            {technician.phone && (
-              <div className="text-xs text-slate-500 flex items-center gap-1.5 pt-1 border-t border-slate-200/70 font-mono">
-                <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <span>{technician.phone}</span>
-              </div>
-            )}
+            <span className="text-xs font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200 shrink-0">
+              Technician → Customer
+            </span>
           </div>
 
-          {/* Operational Impacts Breakdown */}
-          <div className="space-y-2 text-xs">
-            <div className="font-semibold text-slate-800 uppercase tracking-wider font-mono text-[11px]">
-              Platform Action Impact:
+          {activeJobs.length > 0 ? (
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900">
+              <strong>{activeJobs.length} active job(s)</strong> will be unassigned and returned to the queue.
             </div>
-
-            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-2 text-amber-950">
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <span>
-                  Updates real Supabase record (<code className="font-mono bg-white/80 px-1 py-0.5 rounded border border-amber-200 text-amber-900">public.profiles.role = 'customer'</code>).
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <span>
-                  User immediately loses access to the Technician Portal and field actions.
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <span>
-                  User disappears from the Technician Roster, availability lists, and assignment dropdowns.
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <span>
-                  AI Auto-Dispatch engine will no longer consider this user for job dispatches.
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                <span>
-                  Preserves user account, authentication, customer login, and historical completed jobs ({completedJobs.length} completed).
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Active Work Orders Notice */}
-          {activeJobs.length > 0 && (
-            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 space-y-1.5">
-              <div className="font-semibold flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
-                <span>{activeJobs.length} active job(s) will be safely unassigned</span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-indigo-800">
-                These active tickets will be returned to the Approved dispatch pool with audit trail entries so other active technicians can immediately accept them.
-              </p>
-            </div>
+          ) : (
+            <p className="text-xs text-slate-600">
+              Remove Technician access for this account? Completed job history ({completedJobs.length}) will be kept.
+            </p>
           )}
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex flex-col-reverse sm:flex-row items-center justify-end gap-2.5">
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
             disabled={loading}
-            className="w-full sm:w-auto px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 hover:text-slate-900 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+            className="px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-200 rounded-xl cursor-pointer"
           >
             Cancel
           </button>
@@ -244,18 +172,15 @@ export const ManagerRemoveTechnicianRoleModal: React.FC<ManagerRemoveTechnicianR
             type="button"
             onClick={handleConfirmRemoveRole}
             disabled={loading}
-            className="w-full sm:w-auto px-5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer"
           >
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Updating Role in Supabase...</span>
+                <span>Updating...</span>
               </>
             ) : (
-              <>
-                <UserMinus className="w-4 h-4" />
-                <span>Confirm: Remove Technician Role</span>
-              </>
+              <span>Confirm</span>
             )}
           </button>
         </div>

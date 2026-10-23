@@ -68,19 +68,17 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
     setSuccessMsg('');
 
     if (!reason.trim()) {
-      setErrorMsg('Please enter a reason for rescheduling.');
+      setErrorMsg('Enter a reason.');
       return;
     }
     if (!proposedDate) {
-      setErrorMsg('Please select a proposed date.');
+      setErrorMsg('Select a date.');
       return;
     }
 
     const slotCheck = SupabaseService.validateWorkingHoursSlot(proposedTimeSlot);
     if (!slotCheck.valid) {
-      setErrorMsg(
-        slotCheck.error || `Please select a time within ${WORKING_HOURS_LABEL}.`
-      );
+      setErrorMsg(slotCheck.error || `Select a slot within ${WORKING_HOURS_LABEL}.`);
       return;
     }
 
@@ -97,9 +95,9 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
       );
 
       if (!res.success) {
-        setErrorMsg(res.error || 'Could not submit reschedule request.');
+        setErrorMsg(res.error || 'Could not request reschedule.');
       } else {
-        setSuccessMsg('Reschedule request sent. Awaiting confirmation.');
+        setSuccessMsg('Reschedule requested.');
         setReason('');
         setShowForm(false);
         onUpdated?.();
@@ -125,13 +123,9 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
       );
 
       if (!res.success) {
-        setErrorMsg(res.error || `Failed to ${action} reschedule.`);
+        setErrorMsg(res.error || `Could not ${action} reschedule.`);
       } else {
-        setSuccessMsg(
-          action === 'accept'
-            ? 'Appointment updated to the new date and time.'
-            : 'Reschedule declined. Original appointment kept.'
-        );
+        setSuccessMsg(action === 'accept' ? 'Schedule updated.' : 'Reschedule declined.');
         setResponseNote('');
         onUpdated?.();
       }
@@ -143,7 +137,7 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
   const renderStatusBadge = (status: 'pending' | 'accepted' | 'declined') => {
     if (status === 'pending') {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
           <Clock className="w-3 h-3" />
           Pending Response
         </span>
@@ -151,14 +145,14 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
     }
     if (status === 'accepted') {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
           <CheckCircle2 className="w-3 h-3" />
           Accepted
         </span>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 border border-red-300">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 border border-red-300">
         <XCircle className="w-3 h-3" />
         Declined
       </span>
@@ -166,15 +160,15 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl p-4 border border-[#E6E1D6] space-y-3">
+    <div className="bg-white rounded-xl p-3.5 border border-[#E6E1D6] space-y-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852] flex items-center gap-1.5">
             <Calendar className="w-3.5 h-3.5 text-[#143628]" />
-            Appointment & Rescheduling
+            Appointment
           </h4>
-          <p className="text-sm font-semibold text-[#18181B] mt-1">
-            Current Schedule: {request.preferredDate} · {request.preferredTimeSlot}
+          <p className="text-sm font-semibold text-[#18181B] mt-0.5">
+            {request.preferredDate} · {request.preferredTimeSlot}
           </p>
         </div>
 
@@ -186,23 +180,23 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
               setSuccessMsg('');
               setShowForm(true);
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-[#143628] text-[#143628] hover:text-white border border-[#143628]/25 transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-[#143628] text-[#143628] hover:text-white border border-[#143628]/25 transition-colors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            {isPending ? 'Suggest Another Time' : 'Request Reschedule'}
+            <RefreshCw className="w-3 h-3" />
+            {isPending ? 'Suggest Time' : 'Request Reschedule'}
           </button>
         )}
       </div>
 
       {errorMsg && (
-        <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+        <div className="p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+        <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{successMsg}</span>
         </div>
@@ -211,7 +205,7 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
       {/* Active or Latest Reschedule Proposal */}
       {proposal && (
         <div
-          className={`p-3.5 rounded-lg border ${
+          className={`p-3 rounded-lg border ${
             proposal.status === 'pending'
               ? 'bg-amber-50/70 border-amber-200'
               : proposal.status === 'accepted'
@@ -221,20 +215,20 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-bold text-[#18181B]">
-              Proposed by {proposal.requestedByName} ({proposal.requestedByRole})
+              {proposal.requestedByName} ({proposal.requestedByRole})
             </span>
             {renderStatusBadge(proposal.status)}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div className="bg-white/80 p-2 rounded border border-[#E6E1D6]">
-              <span className="text-[#5C5852] block">Proposed New Time</span>
+              <span className="text-[#5C5852] block">Proposed</span>
               <span className="font-bold text-[#143628]">
                 {proposal.proposedDate} · {proposal.proposedTimeSlot}
               </span>
             </div>
             <div className="bg-white/80 p-2 rounded border border-[#E6E1D6]">
-              <span className="text-[#5C5852] block">Original Appointment</span>
+              <span className="text-[#5C5852] block">Previous</span>
               <span className="font-medium text-[#18181B]">
                 {proposal.previousDate} · {proposal.previousTimeSlot}
               </span>
@@ -260,7 +254,7 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
                 type="text"
                 value={responseNote}
                 onChange={(e) => setResponseNote(e.target.value)}
-                placeholder="Optional note..."
+                placeholder="Note (optional)"
                 className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg focus:outline-none focus:border-[#143628]"
               />
               <div className="flex flex-wrap items-center gap-2">
@@ -268,23 +262,23 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
                   type="button"
                   disabled={isSubmitting}
                   onClick={() => handleRespond('accept')}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] text-white transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] text-white disabled:opacity-50"
                 >
-                  Accept New Time
+                  Accept
                 </button>
                 <button
                   type="button"
                   disabled={isSubmitting}
                   onClick={() => setShowForm(true)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-[#FAF8F5] text-[#143628] border border-[#143628]/30 transition-colors"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-[#FAF8F5] text-[#143628] border border-[#143628]/30"
                 >
-                  Suggest Another Date & Time
+                  Suggest Time
                 </button>
                 <button
                   type="button"
                   disabled={isSubmitting}
                   onClick={() => handleRespond('decline')}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-red-50 text-red-700 border border-red-200 transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-red-50 text-red-700 border border-red-200 disabled:opacity-50"
                 >
                   Decline
                 </button>
@@ -298,19 +292,12 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
       {showForm && (
         <form
           onSubmit={handleRequestSubmit}
-          className="p-3.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6] space-y-3"
+          className="p-3 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6] space-y-2.5"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-[#18181B]">
-              {isPending ? 'Propose Alternative Date & Time' : 'Request Appointment Reschedule'}
-            </span>
-            <span className="text-[11px] font-medium text-[#143628]">{WORKING_HOURS_LABEL}</span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <div>
               <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                Proposed Date *
+                New Date *
               </label>
               <input
                 type="date"
@@ -318,17 +305,17 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
                 value={proposedDate}
                 onChange={(e) => setProposedDate(e.target.value)}
                 required
-                className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg focus:outline-none focus:border-[#143628]"
+                className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg"
               />
             </div>
             <div>
               <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                Proposed Time Slot *
+                New Time *
               </label>
               <select
                 value={proposedTimeSlot}
                 onChange={(e) => setProposedTimeSlot(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg focus:outline-none focus:border-[#143628]"
+                className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg"
               >
                 {WORKING_TIME_SLOTS.map((slot) => (
                   <option key={slot} value={slot}>
@@ -339,19 +326,14 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-              Reason for Rescheduling *
-            </label>
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Briefly state why a new time is needed"
-              required
-              className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg focus:outline-none focus:border-[#143628]"
-            />
-          </div>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason for rescheduling *"
+            required
+            className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg"
+          />
 
           <div className="flex items-center justify-end gap-2">
             <button
@@ -366,7 +348,7 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
               disabled={isSubmitting}
               className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] text-white disabled:opacity-50"
             >
-              {isSubmitting ? 'Saving...' : 'Send Reschedule Request'}
+              {isSubmitting ? 'Sending...' : 'Send'}
             </button>
           </div>
         </form>
@@ -375,19 +357,18 @@ export const RescheduleSection: React.FC<RescheduleSectionProps> = ({
       {/* Previous Reschedule History */}
       {request.rescheduleHistory && request.rescheduleHistory.length > 1 && (
         <div className="pt-2 border-t border-[#E6E1D6]">
-          <p className="text-[11px] font-semibold text-[#5C5852] flex items-center gap-1 mb-1.5">
+          <p className="text-[11px] font-semibold text-[#5C5852] flex items-center gap-1 mb-1">
             <History className="w-3 h-3" />
-            Reschedule History ({request.rescheduleHistory.length})
+            History ({request.rescheduleHistory.length})
           </p>
-          <div className="space-y-1 max-h-28 overflow-y-auto">
+          <div className="space-y-1 max-h-24 overflow-y-auto">
             {request.rescheduleHistory.map((item) => (
               <div
                 key={item.id}
                 className="text-[11px] text-[#5C5852] flex flex-wrap items-center justify-between gap-1 bg-[#FAF8F5] px-2.5 py-1 rounded border border-[#E6E1D6]"
               >
                 <span>
-                  {item.requestedByName} ({item.requestedByRole}) → {item.proposedDate} ·{' '}
-                  {item.proposedTimeSlot}
+                  {item.requestedByName} → {item.proposedDate} · {item.proposedTimeSlot}
                 </span>
                 <span className="font-semibold uppercase">{item.status}</span>
               </div>

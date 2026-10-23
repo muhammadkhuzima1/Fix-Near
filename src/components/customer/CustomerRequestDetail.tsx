@@ -118,7 +118,7 @@ export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
   const handleCancel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancelReason.trim()) {
-      setCancelError('Please provide a reason for cancelling.');
+      setCancelError('Enter a reason.');
       return;
     }
     setIsSubmitting(true);
@@ -152,7 +152,7 @@ export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
       setRatingSuccess(true);
       triggerRefresh();
     } else {
-      setRatingError(res.error || 'Failed to save feedback.');
+      setRatingError(res.error || 'Could not save rating.');
     }
   };
 
@@ -416,7 +416,7 @@ export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
                     type="text"
                     value={ratingComment}
                     onChange={(e) => setRatingComment(e.target.value)}
-                    placeholder="Share brief feedback on the technician's work..."
+                    placeholder="Comment (optional)"
                     className="w-full px-3 py-1.5 bg-white border border-amber-200 rounded-lg text-xs"
                   />
                   <button
@@ -446,15 +446,14 @@ export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
               ) : (
                 <form
                   onSubmit={handleCancel}
-                  className="bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-2.5"
+                  className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2"
                 >
-                  <h5 className="text-xs font-bold text-red-900">Cancel Service Request</h5>
                   {cancelError && <p className="text-xs text-red-600">{cancelError}</p>}
                   <input
                     type="text"
                     value={cancelReason}
                     onChange={(e) => setCancelReason(e.target.value)}
-                    placeholder="Reason for cancellation..."
+                    placeholder="Cancellation reason *"
                     className="w-full px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs"
                   />
                   <div className="flex items-center gap-2">
@@ -463,14 +462,14 @@ export const CustomerRequestDetail: React.FC<CustomerRequestDetailProps> = ({
                       disabled={isSubmitting}
                       className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
                     >
-                      Confirm Cancel
+                      Confirm
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowCancelPrompt(false)}
                       className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
                     >
-                      Keep Request
+                      Back
                     </button>
                   </div>
                 </form>

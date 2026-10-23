@@ -114,23 +114,21 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
   const [aiResult, setAiResult] = useState<AIProblemAnalysis | null>(null);
 
   const handleAIAnalyze = async () => {
-    if (!description.trim() && !title.trim()) {
-      setError('Enter a problem description first to run AI analysis.');
+    if (!description.trim()) {
+      setError('Describe the issue first.');
       return;
     }
 
     setError('');
     setIsAnalyzing(true);
     try {
-      const analysis = await AIService.analyzeProblem(description || title);
+      const analysis = await AIService.analyzeProblem(description);
       setAiResult(analysis);
       setCategory(analysis.category);
       setPriority(analysis.priority);
-      if (!title.trim() || title.trim().length < 5) {
-        setTitle(analysis.title);
-      }
+      setTitle(analysis.title);
     } catch {
-      setError('AI analysis failed. You can select the category and priority manually.');
+      setError('AI analysis unavailable. Select category manually.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -144,7 +142,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
       setCoords(null);
       setLocationMessage({
         type: 'error',
-        text: 'Geolocation is not supported by your browser. Please enter your address manually.',
+        text: 'GPS not supported. Enter address manually.',
       });
       return;
     }
@@ -207,19 +205,17 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
         setIsLocating(false);
         setLocationMessage({
           type: 'success',
-          text: `GPS coordinates captured (${lat}, ${lng}). Verify or complete the address fields below.`,
+          text: `GPS captured (${lat}, ${lng}).`,
         });
       },
       (geoError) => {
         setCoords(null);
         setIsLocating(false);
-        let msg = 'Unable to get your current location. Please enter your address manually.';
+        let msg = 'Location unavailable. Enter address manually.';
         if (geoError.code === geoError.PERMISSION_DENIED) {
-          msg = 'Location permission was denied. Please enter your address manually below.';
-        } else if (geoError.code === geoError.POSITION_UNAVAILABLE) {
-          msg = 'Location information is unavailable on this device. Please enter your address manually.';
+          msg = 'Location permission denied. Enter address manually.';
         } else if (geoError.code === geoError.TIMEOUT) {
-          msg = 'Location request timed out. Please try again or enter your address manually.';
+          msg = 'Location timed out. Enter address manually.';
         }
         setLocationMessage({
           type: 'error',
@@ -240,25 +236,22 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
     e.preventDefault();
     setError('');
 
-    if (!description.trim() && !title.trim()) {
-      setError('Please describe the repair issue.');
+    if (!description.trim()) {
+      setError('Describe the issue.');
       return;
     }
     if (!street.trim() || !city.trim()) {
-      setError('Street address and city are required.');
+      setError('Address and city are required.');
       return;
     }
     if (!preferredDate) {
-      setError('Please select a preferred appointment date.');
+      setError('Select a date.');
       return;
     }
 
     const slotValidation = SupabaseService.validateWorkingHoursSlot(preferredTimeSlot);
     if (!slotValidation.valid) {
-      setError(
-        slotValidation.error ||
-          `Appointments must be scheduled during ${WORKING_HOURS_LABEL}.`
-      );
+      setError(slotValidation.error || `Select a slot within ${WORKING_HOURS_LABEL}.`);
       return;
     }
 
@@ -273,9 +266,8 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
 
       if (!aiResult) {
         try {
-          const autoAnalysis = await AIService.analyzeProblem(description || title);
+          const autoAnalysis = await AIService.analyzeProblem(description);
           finalCategory = autoAnalysis.category;
-          // Preserve customer's explicit Urgent selection or apply AI detected urgency
           if (priority === 'high' || priority === 'emergency') {
             finalPriority =
               autoAnalysis.priority === 'emergency' ? 'emergency' : priority;
@@ -288,10 +280,12 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
           requiredSkill = autoAnalysis.requiredSkill;
           technicianSummary = autoAnalysis.technicianSummary;
         } catch {
-          if (!finalTitle) finalTitle = `${category.toUpperCase()} Service Request`;
+          if (!finalTitle) {
+            finalTitle = description.trim().slice(0, 50) || `${category.toUpperCase()} Repair`;
+          }
         }
       } else if (!finalTitle) {
-        finalTitle = aiResult.title;
+        finalTitle = aiResult.title || description.trim().slice(0, 50);
       }
 
       const serviceAddress: ServiceAddress = {
@@ -311,7 +305,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
         customerId,
         title: finalTitle,
         category: finalCategory,
-        description: description.trim() || finalTitle,
+        description: description.trim(),
         priority: finalPriority,
         serviceAddress,
         preferredDate,
@@ -321,7 +315,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
       });
 
       if (!res.success || !res.request) {
-        setError(res.error || 'Failed to submit service request.');
+        setError(res.error || 'Could not submit request.');
         setIsSubmitting(false);
         return;
       }
@@ -353,7 +347,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
       if (onSuccess) onSuccess(res.request.id);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Error creating service request.');
+      setError(err.message || 'Submission failed.');
     } finally {
       setIsSubmitting(false);
     }
@@ -362,107 +356,87 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl border border-[#E6E1D6] shadow-2xl max-w-xl w-full overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl border border-[#E6E1D6] shadow-2xl max-w-lg w-full overflow-hidden my-4 animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-6 py-4 bg-[#143628] text-white flex items-center justify-between">
+        <div className="px-5 py-3.5 bg-[#143628] text-white flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold tracking-tight">New Service Request</h2>
-            <p className="text-xs text-[#E6E1D6]/80 mt-0.5">{WORKING_HOURS_LABEL}</p>
+            <h2 className="text-base font-bold">Request Service</h2>
+            <p className="text-[11px] text-[#E6E1D6]/80">{WORKING_HOURS_LABEL}</p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-colors"
+            className="p-1.5 rounded-lg bg-white/10 text-white/80 hover:text-white hover:bg-white/20"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         <form
           onSubmit={handleSubmit}
-          className="p-5 sm:p-6 space-y-5 max-h-[82vh] overflow-y-auto"
+          className="p-4 sm:p-5 space-y-4 max-h-[84vh] overflow-y-auto"
         >
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
+            <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700 font-medium">
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* 1. Problem Description & AI Analysis */}
-          <div className="space-y-3">
+          {/* 1. Problem & AI Analysis */}
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="block text-xs font-bold uppercase tracking-wider text-[#18181B]">
-                1. Describe the Issue *
-              </label>
+              <label className="text-xs font-bold text-[#18181B]">1. Problem *</label>
               <button
                 type="button"
                 onClick={handleAIAnalyze}
-                disabled={isAnalyzing || (!description.trim() && !title.trim())}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#143628] hover:bg-[#0f291e] disabled:opacity-40 text-white text-xs font-semibold transition-all"
+                disabled={isAnalyzing || !description.trim()}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#143628] hover:bg-[#0f291e] disabled:opacity-40 text-white text-xs font-semibold"
               >
                 {isAnalyzing ? (
                   <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                    <Loader2 className="w-3 h-3 animate-spin text-amber-300" />
                     Analyzing...
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                    Auto-Detect Category & Urgency
+                    <Sparkles className="w-3 h-3 text-amber-300" />
+                    AI Analyze
                   </>
                 )}
               </button>
             </div>
 
             <textarea
-              rows={3}
+              rows={2}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe what needs repair (mention if there is an urgent leak, spark, or outage)..."
-              className="w-full px-3.5 py-2.5 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+              placeholder="What needs repair? (e.g. leaking pipe, AC not cooling)"
+              className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
               required
             />
 
             {aiResult && (
-              <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                  <span className="font-semibold text-[#143628]">
-                    AI Classification: {aiResult.requiredSkill}
-                  </span>
-                </div>
+              <div className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-2 text-xs">
+                <span className="font-semibold text-[#143628] flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  {aiResult.requiredSkill}
+                </span>
                 <PriorityBadge priority={priority} size="sm" />
               </div>
             )}
-
-            <div>
-              <label className="block text-xs font-semibold text-[#5C5852] mb-1">
-                Short Summary Title *
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Brief title of the issue"
-                className="w-full px-3.5 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                required
-              />
-            </div>
           </div>
 
           {/* 2. Category & Priority */}
-          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
+          <div className="space-y-2.5 pt-2 border-t border-[#E6E1D6]">
             <div className="flex items-center justify-between">
-              <label className="block text-xs font-bold uppercase tracking-wider text-[#18181B]">
-                2. Category & Priority
-              </label>
+              <label className="text-xs font-bold text-[#18181B]">2. Category & Priority</label>
               <span className="text-xs font-bold text-[#143628]">
-                Rate: {formatHourlyRate(categoryRates[category])}
+                {formatHourlyRate(categoryRates[category])}
               </span>
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
               {CATEGORIES.map((cat) => {
                 const selected = category === cat.value;
                 return (
@@ -470,38 +444,29 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                     key={cat.value}
                     type="button"
                     onClick={() => setCategory(cat.value)}
-                    className={`flex flex-col items-center p-2.5 rounded-xl border text-center transition-all ${
+                    className={`flex flex-col items-center p-2 rounded-xl border text-center transition-all ${
                       selected
-                        ? 'border-[#143628] bg-[#143628]/5 text-[#143628] ring-2 ring-[#143628]/20'
+                        ? 'border-[#143628] bg-[#143628]/5 text-[#143628] ring-1 ring-[#143628]/20'
                         : 'border-[#E6E1D6] hover:border-gray-300 text-[#5C5852]'
                     }`}
                   >
                     <CategoryIcon
                       category={cat.value}
-                      className={`w-4 h-4 mb-1 ${selected ? 'text-[#143628]' : 'text-[#5C5852]'}`}
+                      className={`w-4 h-4 mb-0.5 ${selected ? 'text-[#143628]' : 'text-[#5C5852]'}`}
                     />
                     <span className="text-[11px] font-bold">{cat.label}</span>
-                    <span className="text-[10px] text-[#5C5852]">
-                      PKR {(categoryRates[cat.value] || 2000).toLocaleString()}
-                    </span>
                   </button>
                 );
               })}
             </div>
 
-            {/* Priority Selector (Normal vs Urgent) */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E1D6]">
-              <div>
-                <span className="text-xs font-bold text-[#18181B] block">Request Priority</span>
-                <span className="text-[11px] text-[#5C5852]">
-                  Urgent requests are prioritized in the dispatch queue for available specialists.
-                </span>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E1D6]">
+              <span className="text-xs font-semibold text-[#18181B]">Priority</span>
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setPriority('medium')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                  className={`px-3 py-1 rounded-lg text-xs font-bold border ${
                     !isUrgent
                       ? 'bg-[#143628] text-white border-[#143628]'
                       : 'bg-white text-[#5C5852] border-[#E6E1D6]'
@@ -511,43 +476,41 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setPriority(priority === 'emergency' ? 'emergency' : 'high')
-                  }
-                  className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                  onClick={() => setPriority(priority === 'emergency' ? 'emergency' : 'high')}
+                  className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold border ${
                     isUrgent
                       ? 'bg-red-600 text-white border-red-600'
                       : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
                   }`}
                 >
-                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <AlertTriangle className="w-3 h-3" />
                   Urgent
                 </button>
               </div>
             </div>
           </div>
 
-          {/* 3. Customer Location Selection */}
-          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-[#18181B] flex items-center gap-1.5">
+          {/* 3. Location */}
+          <div className="space-y-2.5 pt-2 border-t border-[#E6E1D6]">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-bold text-[#18181B] flex items-center gap-1">
                 <MapPin className="w-3.5 h-3.5 text-[#143628]" />
-                3. Service Location *
+                3. Location *
               </label>
               <button
                 type="button"
                 onClick={handleUseCurrentLocation}
                 disabled={isLocating}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-[#143628] text-[#143628] hover:text-white border border-[#143628]/30 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#FAF8F5] hover:bg-[#143628] text-[#143628] hover:text-white border border-[#143628]/30 disabled:opacity-50"
               >
                 {isLocating ? (
                   <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Getting GPS...
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Locating...
                   </>
                 ) : (
                   <>
-                    <Navigation className="w-3.5 h-3.5" />
+                    <Navigation className="w-3 h-3" />
                     Use My Current Location
                   </>
                 )}
@@ -556,7 +519,7 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
 
             {locationMessage && (
               <div
-                className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                className={`px-3 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 ${
                   locationMessage.type === 'success'
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                     : 'bg-amber-50 border-amber-200 text-amber-800'
@@ -570,134 +533,78 @@ export const CreateRequestModal: React.FC<CreateRequestModalProps> = ({
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 font-bold text-[#143628] underline shrink-0"
                   >
-                    Map Pin
+                    Map
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Street Address *
-                </label>
-                <input
-                  type="text"
-                  value={street}
-                  onChange={(e) => setStreet(e.target.value)}
-                  placeholder="Enter street address or area"
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Unit / Floor
-                </label>
-                <input
-                  type="text"
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value)}
-                  placeholder="Optional"
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                />
-              </div>
-            </div>
+            <input
+              type="text"
+              value={street}
+              onChange={(e) => setStreet(e.target.value)}
+              placeholder="Street address or area *"
+              className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+              required
+            />
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  City *
-                </label>
-                <input
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="City"
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Province / State
-                </label>
-                <input
-                  type="text"
-                  value={state}
-                  onChange={(e) => setState(e.target.value)}
-                  placeholder="Province / State"
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Contact Phone *
-                </label>
-                <input
-                  type="tel"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="Phone number"
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                  required
-                />
-              </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="City *"
+                className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                required
+              />
+              <input
+                type="tel"
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                placeholder="Phone *"
+                className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                required
+              />
             </div>
           </div>
 
-          {/* 4. Preferred Schedule */}
-          <div className="space-y-3 pt-2 border-t border-[#E6E1D6]">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-[#18181B] flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-[#143628]" />
-                4. Preferred Schedule *
-              </label>
-              <span className="text-[11px] font-semibold text-[#143628]">
-                {WORKING_HOURS_LABEL}
-              </span>
-            </div>
+          {/* 4. Date & Time */}
+          <div className="space-y-2 pt-2 border-t border-[#E6E1D6]">
+            <label className="text-xs font-bold text-[#18181B] flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-[#143628]" />
+              4. Date & Time *
+            </label>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Date *
-                </label>
-                <input
-                  type="date"
-                  min={minDateStr}
-                  value={preferredDate}
-                  onChange={(e) => setPreferredDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                  required
-                />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="date"
+                min={minDateStr}
+                value={preferredDate}
+                onChange={(e) => setPreferredDate(e.target.value)}
+                className="w-full px-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                required
+              />
 
-              <div>
-                <label className="block text-xs font-medium text-[#5C5852] mb-1">
-                  Time Window *
-                </label>
-                <div className="relative">
-                  <Clock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <select
-                    value={preferredTimeSlot}
-                    onChange={(e) => setPreferredTimeSlot(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
-                  >
-                    {WORKING_TIME_SLOTS.map((slot) => (
-                      <option key={slot} value={slot}>
-                        {slot}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="relative">
+                <Clock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <select
+                  value={preferredTimeSlot}
+                  onChange={(e) => setPreferredTimeSlot(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-[#FAF8F5] border border-[#E6E1D6] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#143628]"
+                >
+                  {WORKING_TIME_SLOTS.map((slot) => (
+                    <option key={slot} value={slot}>
+                      {slot}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
 
           {/* Actions */}
-          <div className="pt-3 border-t border-[#E6E1D6] flex items-center justify-end gap-2.5">
+          <div className="pt-2 border-t border-[#E6E1D6] flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}

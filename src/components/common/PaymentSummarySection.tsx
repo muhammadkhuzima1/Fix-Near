@@ -88,25 +88,25 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
     const parsedPaid = Math.round(Number(amountPaid));
 
     if (!Number.isFinite(parsedTotal) || parsedTotal < 0) {
-      setErrorMsg('Enter a valid total service amount in PKR.');
+      setErrorMsg('Enter a valid total amount.');
       return;
     }
     if (!Number.isFinite(parsedPaid) || parsedPaid < 0) {
-      setErrorMsg('Enter a valid amount paid in PKR.');
+      setErrorMsg('Enter a valid paid amount.');
       return;
     }
     if (parsedPaid > parsedTotal) {
-      setErrorMsg('Amount paid cannot exceed total service amount.');
+      setErrorMsg('Paid amount cannot exceed total.');
       return;
     }
 
     if (method === 'online' && parsedPaid > 0) {
       if (!transactionReference.trim()) {
-        setErrorMsg('Transaction reference is required to verify an online payment.');
+        setErrorMsg('Transaction reference required.');
         return;
       }
       if (!verifiedOnline) {
-        setErrorMsg('Please confirm that online payment receipt has been verified.');
+        setErrorMsg('Confirm online payment verification.');
         return;
       }
     }
@@ -127,9 +127,9 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
       );
 
       if (!res.success) {
-        setErrorMsg(res.error || 'Failed to save payment record.');
+        setErrorMsg(res.error || 'Could not save payment.');
       } else {
-        setSuccessMsg('Payment summary saved to database.');
+        setSuccessMsg('Payment saved.');
         setIsEditing(false);
         onUpdated?.();
       }
@@ -139,12 +139,12 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl p-4 border border-[#E6E1D6] space-y-3">
+    <div className="bg-white rounded-xl p-3.5 border border-[#E6E1D6] space-y-2.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <CreditCard className="w-4 h-4 text-[#143628]" />
           <h4 className="text-xs font-bold uppercase tracking-wider text-[#5C5852]">
-            Payment Summary
+            Payment
           </h4>
         </div>
         <div className="flex items-center gap-2">
@@ -167,40 +167,40 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
       </div>
 
       {errorMsg && (
-        <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+        <div className="p-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       {successMsg && (
-        <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+        <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{successMsg}</span>
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-        <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
-          <span className="text-[11px] text-[#5C5852] block">Total Amount</span>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
+          <span className="text-[11px] text-[#5C5852] block">Total</span>
           <span className="text-sm font-bold text-[#18181B]">
             {formatPrice(summary.totalAmount)}
           </span>
         </div>
-        <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
-          <span className="text-[11px] text-[#5C5852] block">Amount Paid</span>
+        <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
+          <span className="text-[11px] text-[#5C5852] block">Paid</span>
           <span className="text-sm font-bold text-emerald-700">
             {formatPrice(summary.amountPaid)}
           </span>
         </div>
-        <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
-          <span className="text-[11px] text-[#5C5852] block">Remaining Balance</span>
+        <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
+          <span className="text-[11px] text-[#5C5852] block">Balance</span>
           <span className="text-sm font-bold text-[#18181B]">
             {formatPrice(summary.remainingBalance)}
           </span>
         </div>
-        <div className="p-2.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
-          <span className="text-[11px] text-[#5C5852] block">Payment Method</span>
+        <div className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6]">
+          <span className="text-[11px] text-[#5C5852] block">Method</span>
           <span className="text-sm font-bold text-[#143628]">{methodLabel}</span>
         </div>
       </div>
@@ -209,27 +209,27 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
         <div className="text-xs text-[#5C5852] flex items-center gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
           <span>
-            Verified Online Ref: <strong className="text-[#18181B]">{summary.transactionReference}</strong>
-            {summary.verifiedByName ? ` · Recorded by ${summary.verifiedByName}` : ''}
+            Ref: <strong className="text-[#18181B]">{summary.transactionReference}</strong>
+            {summary.verifiedByName ? ` · ${summary.verifiedByName}` : ''}
           </span>
         </div>
       )}
 
       {!summary.transactionReference && summary.verifiedByName && summary.amountPaid > 0 && (
         <div className="text-xs text-[#5C5852]">
-          Confirmed by <strong className="text-[#18181B]">{summary.verifiedByName}</strong> ({summary.verifiedByRole})
+          Recorded by <strong className="text-[#18181B]">{summary.verifiedByName}</strong>
         </div>
       )}
 
       {isEditing && canRecordPayment && (
         <form
           onSubmit={handleSave}
-          className="p-3.5 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6] space-y-3"
+          className="p-3 rounded-lg bg-[#FAF8F5] border border-[#E6E1D6] space-y-2.5"
         >
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
               <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                Total Service Amount (PKR)
+                Total (PKR)
               </label>
               <input
                 type="number"
@@ -244,7 +244,7 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
 
             <div>
               <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                Amount Paid (PKR) *
+                Paid (PKR) *
               </label>
               <input
                 type="number"
@@ -259,7 +259,7 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
 
             <div>
               <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                Payment Method *
+                Method *
               </label>
               <select
                 value={method}
@@ -274,19 +274,14 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
 
           {method === 'online' && Number(amountPaid) > 0 && (
             <div className="space-y-2 p-2.5 rounded-lg bg-white border border-[#E6E1D6]">
-              <div>
-                <label className="block text-[11px] font-semibold text-[#5C5852] mb-1">
-                  Verified Bank / Online Transaction Reference *
-                </label>
-                <input
-                  type="text"
-                  value={transactionReference}
-                  onChange={(e) => setTransactionReference(e.target.value)}
-                  placeholder="Enter verified receipt or transfer ID"
-                  required
-                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg"
-                />
-              </div>
+              <input
+                type="text"
+                value={transactionReference}
+                onChange={(e) => setTransactionReference(e.target.value)}
+                placeholder="Transaction / receipt ID *"
+                required
+                className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E6E1D6] rounded-lg"
+              />
               <label className="flex items-center gap-2 text-xs text-[#18181B] cursor-pointer">
                 <input
                   type="checkbox"
@@ -294,7 +289,7 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
                   onChange={(e) => setVerifiedOnline(e.target.checked)}
                   className="rounded border-gray-300 text-[#143628]"
                 />
-                <span>I have verified that this online transfer was received.</span>
+                <span>Online payment verified</span>
               </label>
             </div>
           )}
@@ -306,14 +301,14 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
                 onClick={() => setAmountPaid(totalAmount)}
                 className="px-2 py-1 rounded text-[11px] font-semibold bg-white border border-[#E6E1D6] text-[#143628] hover:bg-gray-50"
               >
-                Mark Full Amount Paid
+                Full Paid
               </button>
               <button
                 type="button"
                 onClick={() => setAmountPaid('0')}
                 className="px-2 py-1 rounded text-[11px] font-semibold bg-white border border-[#E6E1D6] text-[#5C5852] hover:bg-gray-50"
               >
-                Reset to Unpaid
+                Unpaid
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -329,7 +324,7 @@ export const PaymentSummarySection: React.FC<PaymentSummarySectionProps> = ({
                 disabled={isSaving}
                 className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#143628] hover:bg-[#0f291e] text-white disabled:opacity-50"
               >
-                {isSaving ? 'Saving...' : 'Save Payment'}
+                {isSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

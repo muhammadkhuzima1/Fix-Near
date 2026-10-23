@@ -135,7 +135,7 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
   const handleReject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rejectReason.trim()) {
-      setError('Please enter a reason for declining this assignment.');
+      setError('Enter a reason for declining.');
       return;
     }
     setIsSubmitting(true);
@@ -211,7 +211,7 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
     e.preventDefault();
     setError('');
     if (!resolutionSummary.trim()) {
-      setError('Resolution summary is required to complete the job.');
+      setError('Enter resolution summary.');
       return;
     }
     setIsSubmitting(true);
@@ -298,29 +298,24 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
 
           {/* Action Banner for Assigned / Accepted Status */}
           {request.status === 'assigned' && (
-            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h4 className="text-xs font-bold text-purple-950 uppercase tracking-wider">
-                  New Job Dispatched
-                </h4>
-                <p className="text-xs text-purple-800 mt-0.5">
-                  Accept this job, request a reschedule if busy, or decline if unavailable.
-                </p>
-              </div>
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <span className="text-xs font-bold text-purple-950 uppercase tracking-wider">
+                New Assignment
+              </span>
               {!showRejectPrompt && (
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={handleAccept}
                     disabled={isSubmitting}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm"
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm"
                   >
                     <ThumbsUp className="w-3.5 h-3.5" />
-                    Accept Job
+                    Accept
                   </button>
                   <button
                     onClick={() => setShowRejectPrompt(true)}
                     disabled={isSubmitting}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-red-50 text-red-600 border border-red-200 text-xs font-semibold rounded-xl"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 text-xs font-semibold rounded-xl"
                   >
                     <ThumbsDown className="w-3.5 h-3.5" />
                     Decline
@@ -333,28 +328,27 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
           {showRejectPrompt && request.status === 'assigned' && (
             <form
               onSubmit={handleReject}
-              className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2.5"
+              className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2"
             >
-              <h5 className="text-xs font-bold text-red-900">Reason for Declining Assignment</h5>
               <input
                 type="text"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="State why you cannot take this job..."
+                placeholder="Reason for declining *"
                 className="w-full px-3 py-1.5 bg-white border border-red-200 rounded-lg text-xs"
               />
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg"
                 >
-                  Confirm Decline
+                  Confirm
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowRejectPrompt(false)}
-                  className="px-3.5 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
+                  className="px-3 py-1.5 bg-white border border-gray-200 text-gray-700 text-xs font-medium rounded-lg"
                 >
                   Cancel
                 </button>
@@ -363,19 +357,14 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
           )}
 
           {request.status === 'accepted' && (
-            <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h4 className="text-xs font-bold text-cyan-950 uppercase tracking-wider">
-                  Ready to Start
-                </h4>
-                <p className="text-xs text-cyan-800 mt-0.5">
-                  Start work when you arrive on site.
-                </p>
-              </div>
+            <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-3.5 flex items-center justify-between gap-3">
+              <span className="text-xs font-bold text-cyan-950 uppercase tracking-wider">
+                Ready to Start
+              </span>
               <button
                 onClick={handleStartJob}
                 disabled={isSubmitting}
-                className="flex items-center gap-1.5 px-4 py-2 bg-cyan-700 hover:bg-cyan-800 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm shrink-0"
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-cyan-700 hover:bg-cyan-800 disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm shrink-0"
               >
                 <Play className="w-3.5 h-3.5 fill-current" />
                 Start Job
@@ -598,17 +587,17 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
               {request.status === 'in_progress' && (
                 <form
                   onSubmit={handleCompleteJob}
-                  className="pt-3 border-t border-[#E6E1D6] space-y-3"
+                  className="pt-3 border-t border-[#E6E1D6] space-y-2.5"
                 >
                   <div>
                     <label className="block text-xs font-bold text-emerald-900 mb-1">
-                      Final Resolution Summary *
+                      Resolution Summary *
                     </label>
                     <textarea
                       rows={2}
                       value={resolutionSummary}
                       onChange={(e) => setResolutionSummary(e.target.value)}
-                      placeholder="Describe the completed repair..."
+                      placeholder="Summary of completed work..."
                       className="w-full px-3 py-2 bg-emerald-50/40 border border-emerald-300 rounded-xl text-xs"
                       required
                     />
@@ -617,10 +606,10 @@ export const TechnicianJobDetailModal: React.FC<TechnicianJobDetailModalProps> =
                     <button
                       type="submit"
                       disabled={isSubmitting}
-                      className="flex items-center gap-1.5 px-5 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm"
+                      className="flex items-center gap-1.5 px-4 py-2 bg-[#143628] hover:bg-[#0f291e] disabled:opacity-50 text-white text-xs font-semibold rounded-xl shadow-sm"
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      Mark Job Completed
+                      Complete Job
                     </button>
                   </div>
                 </form>

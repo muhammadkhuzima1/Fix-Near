@@ -88,7 +88,7 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
   const handleAssign = async () => {
     if (!currentUser) return;
     if (!selectedTechId) {
-      setError('Please select a technician to assign.');
+      setError('Select a technician.');
       return;
     }
 
@@ -105,14 +105,11 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
       }
     );
     if (res.success) {
-      showToast(
-        `Assigned technician to ticket ${request.ticketNumber} (${scheduledDate}, ${scheduledTimeSlot}).`,
-        'success'
-      );
+      showToast(`Assigned ${request.ticketNumber}.`, 'success');
       onSuccess();
       onClose();
     } else {
-      setError(res.error || 'Failed to assign technician.');
+      setError(res.error || 'Could not assign technician.');
     }
     setLoading(false);
   };
@@ -125,16 +122,16 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
         onClick={onClose}
       />
 
-      <div className="min-h-screen px-2 sm:px-4 text-center flex items-center justify-center py-4">
-        <div className="relative bg-white text-left rounded-2xl shadow-2xl max-w-xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-7 z-10 box-border">
+      <div className="min-h-screen px-3 sm:px-4 text-center flex items-center justify-center py-4">
+        <div className="relative bg-white text-left rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 z-10 box-border">
           {/* Header */}
-          <div className="flex items-start justify-between pb-3 sm:pb-4 border-b border-slate-200 gap-2">
+          <div className="flex items-start justify-between pb-3 border-b border-slate-200 gap-2">
             <div className="min-w-0">
-              <h2 className="text-base sm:text-xl font-bold text-slate-900 truncate">
-                Assign Field Technician
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate">
+                Assign Technician
               </h2>
               <p className="text-xs text-slate-500 mt-0.5 truncate">
-                Ticket <span className="font-mono text-slate-800">{request.ticketNumber}</span>: {request.title}
+                <span className="font-mono text-slate-800">{request.ticketNumber}</span> · {request.title}
               </p>
             </div>
             <button
@@ -146,74 +143,56 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
           </div>
 
           {error && (
-            <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700">
+            <div className="mt-3 p-2.5 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
-          <div className="mt-4 sm:mt-5 space-y-4">
-            {/* Working Hours Schedule Selection */}
-            <div className="p-3.5 bg-[#FAF8F5] border border-[#E8E2D8] rounded-xl space-y-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-xs font-bold text-[#143628] flex items-center gap-1.5">
+          <div className="mt-4 space-y-3.5">
+            {/* Schedule Selection */}
+            <div className="p-3 bg-[#FAF8F5] border border-[#E8E2D8] rounded-xl space-y-2">
+              <div className="flex items-center justify-between gap-2 text-xs font-bold text-[#143628]">
+                <span className="flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5" />
-                  <span>Appointment Schedule</span>
+                  Schedule
                 </span>
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#143628] bg-white px-2.5 py-0.5 rounded border border-[#D8CFBE]">
-                  <Clock className="w-3 h-3" />
-                  <span>{WORKING_HOURS_DISPLAY}</span>
-                </span>
+                <span className="text-[11px] font-medium">{WORKING_HOURS_DISPLAY}</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                    Appointment Date
-                  </label>
-                  <input
-                    type="date"
-                    value={scheduledDate}
-                    min={new Date().toISOString().split('T')[0]}
-                    onChange={(e) => setScheduledDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-600 mb-1">
-                    Working Hours Window
-                  </label>
-                  <select
-                    value={scheduledTimeSlot}
-                    onChange={(e) => setScheduledTimeSlot(e.target.value)}
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
-                  >
-                    {WORKING_TIME_SLOTS.map((slot) => (
-                      <option key={slot} value={slot}>
-                        {slot}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  value={scheduledDate}
+                  min={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setScheduledDate(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
+                />
+                <select
+                  value={scheduledTimeSlot}
+                  onChange={(e) => setScheduledTimeSlot(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 font-mono focus:outline-none focus:border-[#143628]"
+                >
+                  {WORKING_TIME_SLOTS.map((slot) => (
+                    <option key={slot} value={slot}>
+                      {slot}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
             <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Select Qualified Technician ({technicians.length} available)
+              Technicians ({technicians.length})
             </div>
 
             {technicians.length === 0 ? (
-              <div className="p-5 sm:p-6 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center space-y-2">
-                <Wrench className="w-8 h-8 text-slate-400 mx-auto" />
-                <div className="text-sm font-semibold text-slate-800">
-                  No technicians provisioned yet
-                </div>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  Create technician accounts first from the Technicians tab before assigning dispatches.
-                </p>
+              <div className="p-5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-center space-y-1">
+                <Wrench className="w-6 h-6 text-slate-400 mx-auto" />
+                <div className="text-xs font-semibold text-slate-700">No technicians found</div>
               </div>
             ) : (
-              <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto border border-slate-200 rounded-xl">
+              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto border border-slate-200 rounded-xl">
                 {technicians.map((tech) => {
                   const profile =
                     techProfiles.find((p) => p.id === tech.id) ||
@@ -224,13 +203,13 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
                     <div
                       key={tech.id}
                       onClick={() => setSelectedTechId(tech.id)}
-                      className={`p-3 sm:p-3.5 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                      className={`p-3 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                         isSelected ? 'bg-indigo-50/80' : 'hover:bg-slate-50'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                      <div className="flex items-center gap-2.5 min-w-0">
                         <div
-                          className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center font-semibold text-xs shrink-0 ${
+                          className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-xs shrink-0 ${
                             isSelected
                               ? 'bg-indigo-600 text-white'
                               : 'bg-slate-100 text-slate-700'
@@ -251,7 +230,7 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
                               <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" title="Off Duty" />
                             )}
                           </div>
-                          <div className="text-[11px] sm:text-xs text-slate-500 flex items-center gap-1.5 mt-0.5 truncate font-mono">
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5 truncate font-mono">
                             <span>{profile?.specialty || 'Field Tech'}</span>
                             <span>·</span>
                             <span>{tech.phone}</span>
@@ -259,7 +238,7 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
                         </div>
                       </div>
 
-                      <div className="text-right shrink-0 flex items-center gap-2 sm:gap-3">
+                      <div className="text-right shrink-0 flex items-center gap-2">
                         <div className="text-xs text-right hidden min-[400px]:block">
                           <div className="font-medium text-slate-800 flex items-center gap-1 justify-end">
                             <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
@@ -286,7 +265,7 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
             )}
 
             {/* Actions */}
-            <div className="pt-3 sm:pt-4 border-t border-slate-200 flex items-center justify-end gap-2.5">
+            <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={onClose}
@@ -298,9 +277,9 @@ export const ManagerAssignTechnicianModal: React.FC<ManagerAssignTechnicianModal
                 type="button"
                 disabled={loading || technicians.length === 0}
                 onClick={handleAssign}
-                className="px-4 sm:px-5 py-2 text-xs sm:text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
               >
-                {loading ? 'Assigning...' : 'Confirm Assignment'}
+                {loading ? 'Assigning...' : 'Assign'}
               </button>
             </div>
           </div>
